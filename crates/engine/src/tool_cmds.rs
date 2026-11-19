@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Tool material",
             [],
             None,
-            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?, enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply)",
+            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's fixed direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other), enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply)",
             always,
             material
         ),
@@ -336,8 +336,11 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
         s.tool.mask_value = v.clamp(0.0, 1.0);
     }
     if let Some(c) = channel {
-        if let Some(v) = color.or(value) {
+        let current = s.tool.values.get(&c).copied().unwrap_or(c.default_value());
+        let direction = crate::flow_params::flow_value_param("tool.material", p, c, current)?;
+        if let Some(v) = direction.or(color.or(value)) {
             let v = if c == Channel::Height { v.map(|x| x.clamp(-1.0, 1.0)) } else { v.map(|x| x.clamp(0.0, 1.0)) };
+            let v = crate::flow_params::uniform_for(c, v);
             s.tool.values.insert(c, v);
             s.tool.enabled.insert(c);
             s.tool.material = None;

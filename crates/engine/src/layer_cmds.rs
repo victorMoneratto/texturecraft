@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set fill source",
             [],
             None,
-            "{layer? | effect?: content fill effect id, channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?, resolution?: auto|textureSet|uvTile|custom, customResolution?, resolutionFactor?: -3..3, tile?: {Tile Generator settings in camelCase, as project.inspect shows them}, tileDefaults?: true (alone, they edit the channel's pattern)|image?, normalFormat?: openGl|directX (the image's normal map convention; alone, it changes the channel's image)|anchor?: anchor effect id, anchorChannel?, colors?: gradient map of a color channel's procedural or anchor, 1 to 16 colors dark to light ([r, g, b] linear or \"#rrggbb\" sRGB; [] removes it; absent keeps it; alone, it changes the channel's source)|gradientMap?: true (turns the color stops on from the channel's current procedural or anchor: a procedural's low, their midpoint and high; an anchor's black, gray and white; stops already there stay), enabled?, solo?: true (this channel on, every other one off)}",
+            "{layer? | effect?: content fill effect id, channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other)|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?, resolution?: auto|textureSet|uvTile|custom, customResolution?, resolutionFactor?: -3..3, tile?: {Tile Generator settings in camelCase, as project.inspect shows them}, tileDefaults?: true (alone, they edit the channel's pattern)|image?, normalFormat?: openGl|directX (the image's normal map convention; alone, it changes the channel's image)|anchor?: anchor effect id, anchorChannel?, colors?: gradient map of a color channel's procedural or anchor, 1 to 16 colors dark to light ([r, g, b] linear or \"#rrggbb\" sRGB; [] removes it; absent keeps it; alone, it changes the channel's source)|gradientMap?: true (turns the color stops on from the channel's current procedural or anchor: a procedural's low, their midpoint and high; an anchor's black, gray and white; stops already there stay), enabled?, solo?: true (this channel on, every other one off)}",
             has_layer,
             fill_set
         ),
@@ -541,7 +541,7 @@ fn fill_set(session: &mut Session, params: &Value) -> Result<Value> {
     if source.is_none() && enabled.is_none() && normal_format.is_none() && colors.is_none() && !init_ramp {
         return Err(bad(
             CMD,
-            "give `color`, `value`, `procedural`, `image`, `anchor`, pattern settings (`tile`, `resolution`…), `colors`, `gradientMap`, `normalFormat`, `enabled` or `solo`",
+            "give `color`, `value`, `angle`, `speed`, `procedural`, `image`, `anchor`, pattern settings (`tile`, `resolution`…), `colors`, `gradientMap`, `normalFormat`, `enabled` or `solo`",
         ));
     }
 
@@ -631,8 +631,17 @@ fn fill_source_from(
         return Ok(Some(Source::Procedural { pattern, low, high, ramp: Vec::new() }));
     }
 
+    // A direction and a speed are the flow map's way of giving a value
+    let current = match fill_mut(session, target)?.sources.get(&channel) {
+        Some(Source::Uniform(value)) => *value,
+        _ => channel.default_value(),
+    };
+    if let Some(flow) = crate::flow_params::flow_value_param(CMD, params, channel, current)? {
+        return Ok(Some(Source::Uniform(flow)));
+    }
+
     if let Some(color) = uniform {
-        return Ok(Some(Source::Uniform(color)));
+        return Ok(Some(Source::Uniform(crate::flow_params::uniform_for(channel, color))));
     }
 
     if let Some(name) = strp(params, "image") {
