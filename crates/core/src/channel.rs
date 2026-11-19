@@ -97,8 +97,9 @@ pub enum ChannelKind {
     Scalar,
     /// A signed scalar (height).
     Signed,
-    /// A signed 2D vector packed into 0..1 (`v * 0.5 + 0.5`) in the first two components; the
-    /// third is unused and zero. Unlike a normal it has a length, so it is never renormalised.
+    /// A signed 2D vector packed into 0..1 in the first two components, around the level that
+    /// stores a vector at rest ([`crate::flow_code`], not a plain half); the third is unused and
+    /// zero. Unlike a normal it has a length, so it is never renormalised.
     Vector,
 }
 
