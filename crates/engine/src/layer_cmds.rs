@@ -159,7 +159,10 @@ fn add_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let fill = fill_from("layer.add.fill", p)?;
     let id = s.edit("Add fill layer", |s| {
         let id = s.doc.project.alloc_id();
-        insert_selected(s, Layer::new(id, name, LayerKind::Fill(fill), &channels_of(s)))
+        // The set's channels, as nobody named any: a fill stays out of the flow map
+        let kind = LayerKind::Fill(fill);
+        let channels = kind.default_channels(&channels_of(s));
+        insert_selected(s, Layer::new(id, name, kind, &channels))
     })?;
     Ok(json!({ "layer": id.0 }))
 }

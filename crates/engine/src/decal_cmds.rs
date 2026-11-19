@@ -195,7 +195,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         let id = s.doc.project.alloc_id();
         let Some(channel) = target else {
             let effect_id = s.doc.project.alloc_id();
-            let mut layer = Layer::new(id, name, LayerKind::Fill(Fill::default()), &set_channels);
+            let kind = LayerKind::Fill(Fill::default());
+            let channels = kind.default_channels(&set_channels);
+            let mut layer = Layer::new(id, name, kind, &channels);
             let mut mask = Mask::new(MaskBackground::Black);
             mask.effects.push(Effect::new(effect_id, EffectKind::Fill { source: Source::image(image.clone()), projection: Projection::Decal(decal) }));
             layer.mask = Some(mask);

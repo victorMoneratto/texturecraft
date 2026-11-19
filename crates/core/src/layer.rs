@@ -122,11 +122,19 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
-    /// Whether a layer of this kind gets channel `c` when the layer is created or the channel is
-    /// added to its set. A fill writes every enabled channel under its whole mask, so a material
-    /// or grime fill would reset the flow map below it to still: fills get it only when asked
+    /// Whether a layer of this kind gets channel `c` when nobody asked for it: the layer is
+    /// created with its set's channels, or the channel is added to its set. A fill writes every
+    /// enabled channel under its whole mask, so a material or grime fill would reset the flow
+    /// map below it to still: fills get it only when asked
     pub fn enables_by_default(&self, c: Channel) -> bool {
         c != Channel::Flow || !matches!(self, LayerKind::Fill(_))
+    }
+
+    /// The channels of a set (`set_channels`) that a new layer of this kind starts with when
+    /// its caller names none. A caller that names channels gives them to [`Layer::new`] as they
+    /// are: asking for the flow map on a fill is how a fill gets it
+    pub fn default_channels(&self, set_channels: &[Channel]) -> Vec<Channel> {
+        set_channels.iter().copied().filter(|c| self.enables_by_default(*c)).collect()
     }
 
     pub fn name(&self) -> &'static str {
@@ -140,15 +148,15 @@ impl LayerKind {
 }
 
 impl Layer {
-    /// A layer with every channel of `channels` enabled at Normal/100%.
+    /// A layer with every channel of `channels` enabled at Normal/100%. A caller that enables
+    /// its set's channels without naming them passes [`LayerKind::default_channels`].
     pub fn new(id: LayerId, name: impl Into<String>, kind: LayerKind, channels: &[Channel]) -> Layer {
-        let blends = channels.iter().filter(|c| kind.enables_by_default(**c)).map(|c| (*c, ChannelBlend::default())).collect();
         Layer {
             id,
             name: name.into(),
             visible: true,
             kind,
-            channels: blends,
+            channels: channels.iter().map(|c| (*c, ChannelBlend::default())).collect(),
             mask: None,
             content_effects: Vec::new(),
             color_tag: None,
@@ -1625,5 +1633,23 @@ mod tests {
             assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::Value::String(saved_name));
             assert_eq!(serde_json::from_value::<ProceduralKind>(serde_json::to_value(kind).unwrap()).unwrap(), kind);
         }
+    }
+
+    #[test]
+    fn a_fill_gets_the_flow_map_when_asked_and_not_by_default() {
+        let set_channels = [Channel::BaseColor, Channel::Roughness, Channel::Flow];
+        let fill = || LayerKind::Fill(Fill::default());
+        let group = LayerKind::Group { children: Vec::new(), collapsed: false };
+
+        // Defaulted from the set: fills leave the flow map out, the other kinds take it
+        assert_eq!(fill().default_channels(&set_channels), [Channel::BaseColor, Channel::Roughness]);
+        assert_eq!(LayerKind::Paint.default_channels(&set_channels), set_channels);
+        assert_eq!(group.default_channels(&set_channels), set_channels);
+
+        // Named by the caller: kept as named
+        let asked = Layer::new(LayerId(1), "flow fill", fill(), &[Channel::Flow]);
+        assert_eq!(asked.channels.keys().copied().collect::<Vec<_>>(), [Channel::Flow]);
+        let all = Layer::new(LayerId(2), "fill", fill(), &set_channels);
+        assert!(all.channels.contains_key(&Channel::Flow));
     }
 }
