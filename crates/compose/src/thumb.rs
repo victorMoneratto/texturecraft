@@ -150,12 +150,18 @@ fn encode_flat(flat: &[FlatTile], channel: Channel, w: u32, h: u32) -> ThumbImag
 }
 
 /// A channel value as display bytes: colors linear → sRGB, signed values with 0 at mid gray,
-/// normal maps, vectors and scalars as stored.
+/// normal maps and scalars as stored, the flow map as its raw view and an 8-bit export show it.
 fn display(channel: Channel, v: [f32; 3]) -> [u8; 3] {
     match channel.kind() {
         ChannelKind::Color => v.map(|c| to_byte(linear_to_srgb(c.clamp(0.0, 1.0)))),
         ChannelKind::Signed => v.map(|c| to_byte(c * 0.5 + 0.5)),
-        ChannelKind::Scalar | ChannelKind::NormalMap | ChannelKind::Vector => v.map(to_byte),
+        ChannelKind::Scalar | ChannelKind::NormalMap => v.map(to_byte),
+
+        // Plain rounding puts still water and a full reverse flow a level off the view's colours
+        ChannelKind::Vector => {
+            let [red, green, blue, _] = crate::flow_view_texel(&v.map(texturecraft_core::flow_stored_level));
+            [red, green, blue]
+        }
     }
 }
 
@@ -204,3 +210,6 @@ fn encode_channel(comp: &Composite, channel: Channel, inp: &Inputs) -> ThumbImag
 fn to_byte(v: f32) -> u8 {
     if v.is_finite() { (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8 } else { 0 }
 }
+
+#[cfg(test)]
+mod flow_tests;

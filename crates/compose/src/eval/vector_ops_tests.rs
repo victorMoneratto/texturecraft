@@ -119,16 +119,16 @@ fn every_effect() -> Vec<EffectKind> {
     effects
 }
 
-struct Fixture {
-    project: Project,
+pub(crate) struct Fixture {
+    pub(crate) project: Project,
     mesh: Mesh,
     gbuf: UvGBuffer,
     pixels: PixelStore,
-    layer: LayerId,
+    pub(crate) layer: LayerId,
 }
 
 /// A plane whose set has the flow map and one fill layer writing `source` into it everywhere
-fn flow_fill(source: Source) -> Fixture {
+pub(crate) fn flow_fill(source: Source) -> Fixture {
     let mesh = primitives::plane(2.0, 2);
     let gbuf = UvGBuffer::new(&mesh, 0, SIDE, SIDE);
     let mut project = Project::new("t", "builtin:plane");
@@ -146,7 +146,7 @@ fn flow_fill(source: Source) -> Fixture {
 }
 
 impl Fixture {
-    fn with_inputs<R>(&self, read: impl FnOnce(&Inputs) -> R) -> R {
+    pub(crate) fn with_inputs<R>(&self, read: impl FnOnce(&Inputs) -> R) -> R {
         let (images, baked) = (ImageStore::default(), BakedMaps::default());
         read(&Inputs {
             project: &self.project,

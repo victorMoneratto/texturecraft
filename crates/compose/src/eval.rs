@@ -6,7 +6,7 @@
 mod pad_tests;
 pub(crate) mod thumbnail;
 #[cfg(test)]
-mod vector_ops_tests;
+pub(crate) mod vector_ops_tests;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
