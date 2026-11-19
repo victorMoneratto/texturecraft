@@ -70,9 +70,9 @@ impl DisplayKind {
         if matches!(self, DisplayKind::Height | DisplayKind::Normal) { 8 } else { 4 }
     }
 
-    /// Display textures affected by a channel.
-    pub fn of_channel(c: Channel) -> DisplayKind {
-        match c {
+    /// The display texture affected by a channel (None: no shading texture holds it).
+    pub fn of_channel(c: Channel) -> Option<DisplayKind> {
+        Some(match c {
             Channel::BaseColor | Channel::Opacity => DisplayKind::BaseColor,
             Channel::Normal | Channel::SheenRoughness => DisplayKind::Normal,
             Channel::Height | Channel::Specular => DisplayKind::Height,
@@ -80,8 +80,11 @@ impl DisplayKind {
             Channel::CoatWeight | Channel::CoatRoughness | Channel::AnisotropyLevel | Channel::AnisotropyAngle => DisplayKind::Lobes,
             Channel::SheenColor | Channel::SheenWeight => DisplayKind::Sheen,
             Channel::CoatNormal | Channel::Transmission => DisplayKind::Extra,
+
+            // The flow map shades nothing: without this arm it would count as an Orm channel
+            Channel::Flow => return None,
             _ => DisplayKind::Orm,
-        }
+        })
     }
 
     /// Whether a texture reads anything but its own channels: Orm and Normal fold in the baked
@@ -103,7 +106,7 @@ impl DisplayKind {
 /// baked maps or tile scales too); the others only when the set has one of their channels
 /// (otherwise every tile is the placeholder default).
 pub fn kinds_for(channels: &[Channel]) -> impl Iterator<Item = DisplayKind> + '_ {
-    DisplayKind::ALL.into_iter().filter(|k| k.reads_more_than_channels() || channels.iter().any(|c| DisplayKind::of_channel(*c) == *k))
+    DisplayKind::ALL.into_iter().filter(|k| k.reads_more_than_channels() || channels.iter().any(|c| DisplayKind::of_channel(*c) == Some(*k)))
 }
 
 fn u8_of(v: u16) -> u8 {
@@ -383,8 +386,9 @@ mod tests {
 
         assert_eq!(at(0), 0.0);
         assert!((at(1) - 1.0).abs() < 1e-3 && (at(2) - 0.5).abs() < 1e-3 && at(3) == 0.0);
-        assert_eq!(DisplayKind::of_channel(Channel::Specular), DisplayKind::Height);
-        assert_eq!(DisplayKind::of_channel(Channel::Glossiness), DisplayKind::Orm);
+        assert_eq!(DisplayKind::of_channel(Channel::Specular), Some(DisplayKind::Height));
+        assert_eq!(DisplayKind::of_channel(Channel::Glossiness), Some(DisplayKind::Orm));
+        assert_eq!(DisplayKind::of_channel(Channel::Flow), None);
     }
 
     #[test]
@@ -410,7 +414,7 @@ mod tests {
         assert!((normal_texel(&comp, &BakedMaps::default(), 1)[3] - 0.3).abs() < 1e-3 && near(&px(DisplayKind::Emissive)[3..], &[102]));
         assert!(near(&px(DisplayKind::Extra), &[255, 128, 153, 0]), "{:?}", px(DisplayKind::Extra));
         for c in Channel::LOBES {
-            assert_ne!(DisplayKind::of_channel(c), DisplayKind::Orm, "{c:?}");
+            assert_ne!(DisplayKind::of_channel(c), Some(DisplayKind::Orm), "{c:?}");
         }
     }
 }

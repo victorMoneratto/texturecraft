@@ -2541,6 +2541,15 @@ fn material_controls(app: &mut TextureCraftApp, ui: &mut Ui) {
             ChannelKind::NormalMap => {
                 ui.label(RichText::new(tr("Normal: painting uses the flat normal")).color(tokens.text_dim));
             }
+            ChannelKind::Vector => {
+                // The stored value is the vector itself: a still value forgets its direction
+                let (mut angle_degrees, mut speed) = texturecraft_engine::core::flow_to_polar(value);
+                let turned = slider(ui, tr("Flow direction"), &mut angle_degrees, 0.0..=360.0, 0).changed();
+                let paced = slider(ui, tr("Flow speed"), &mut speed, 0.0..=1.0, 2).changed();
+                if turned || paced {
+                    app.session.tool.values.insert(channel, texturecraft_engine::core::flow_from_polar(angle_degrees, speed));
+                }
+            }
             ChannelKind::Signed => {
                 if slider(ui, tr(channel.label()), &mut value[0], -1.0..=1.0, 2).changed() {
                     app.session.tool.values.insert(channel, [value[0]; 3]);

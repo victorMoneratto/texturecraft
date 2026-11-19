@@ -39,7 +39,41 @@ pub enum Channel {
     Transmission,
     /// Tangent-space normal of the clear coat (relative to the mesh normal).
     CoatNormal,
+    /// Flow map: the direction the surface appears to move, in the mesh's UV basis (u right,
+    /// v down), times a 0..1 speed. No shading lobe reads it: it is authored for export.
+    Flow,
 }
+
+/// A flow map texel with no flow: a zero vector, packed.
+pub const FLOW_STILL: [f32; 3] = [0.5, 0.5, 0.0];
+
+/// The packed flow map value of a flow at `angle_degrees` and `speed` (0..1). The angle turns
+/// counter-clockwise as the texture is seen, from 0 pointing right: 90 points up the image,
+/// which is towards smaller V. Hostile numbers give a still texel.
+pub fn flow_from_polar(angle_degrees: f32, speed: f32) -> [f32; 3] {
+    if !angle_degrees.is_finite() || !speed.is_finite() {
+        return FLOW_STILL;
+    }
+
+    let (sin, cos) = angle_degrees.to_radians().sin_cos();
+    let speed = speed.clamp(0.0, 1.0);
+    [0.5 + 0.5 * cos * speed, 0.5 - 0.5 * sin * speed, 0.0]
+}
+
+/// The angle (0..360 degrees, see [`flow_from_polar`]) and speed (0..1) of a packed flow map
+/// value. A still texel has no direction and reads as angle 0.
+pub fn flow_to_polar(value: [f32; 3]) -> (f32, f32) {
+    let (x, y) = (value[0] * 2.0 - 1.0, value[1] * 2.0 - 1.0);
+    let speed = x.hypot(y);
+    if !speed.is_finite() || speed < FLOW_MIN_SPEED {
+        return (0.0, 0.0);
+    }
+
+    ((-y).atan2(x).to_degrees().rem_euclid(360.0), speed.min(1.0))
+}
+
+/// Below this length a flow vector has no usable direction (16-bit storage keeps about 1/32768)
+const FLOW_MIN_SPEED: f32 = 1e-4;
 
 /// How a channel's values are stored and interpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,10 +86,13 @@ pub enum ChannelKind {
     Scalar,
     /// A signed scalar (height).
     Signed,
+    /// A signed 2D vector packed into 0..1 (`v * 0.5 + 0.5`) in the first two components; the
+    /// third is unused and zero. Unlike a normal it has a length, so it is never renormalised.
+    Vector,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 21] = [
+    pub const ALL: [Channel; 22] = [
         Channel::BaseColor,
         Channel::Metallic,
         Channel::Roughness,
@@ -77,6 +114,8 @@ impl Channel {
         Channel::ScatterWeight,
         Channel::Transmission,
         Channel::CoatNormal,
+        // Appended, never inserted: the viewport shaders switch on these indices
+        Channel::Flow,
     ];
 
     /// The extra shading lobes (clear coat, sheen, anisotropy, subsurface scattering,
@@ -103,14 +142,15 @@ impl Channel {
             Channel::BaseColor | Channel::Emissive | Channel::Specular | Channel::SheenColor => ChannelKind::Color,
             Channel::Normal | Channel::CoatNormal => ChannelKind::NormalMap,
             Channel::Height => ChannelKind::Signed,
+            Channel::Flow => ChannelKind::Vector,
             _ => ChannelKind::Scalar,
         }
     }
 
-    /// Value components (without coverage): 3 for colors and normals, 1 for scalars.
+    /// Value components (without coverage): 3 for colors, normals and vectors, 1 for scalars.
     pub fn components(self) -> usize {
         match self.kind() {
-            ChannelKind::Color | ChannelKind::NormalMap => 3,
+            ChannelKind::Color | ChannelKind::NormalMap | ChannelKind::Vector => 3,
             ChannelKind::Scalar | ChannelKind::Signed => 1,
         }
     }
@@ -131,6 +171,7 @@ impl Channel {
             Channel::SheenRoughness => [0.5; 3],
             Channel::Roughness => [0.5; 3],
             Channel::Normal | Channel::CoatNormal => [0.5, 0.5, 1.0],
+            Channel::Flow => FLOW_STILL,
             Channel::Opacity | Channel::AmbientOcclusion => [1.0; 3],
             Channel::SpecularLevel | Channel::Glossiness => [0.5; 3],
             // F0 of a common dielectric (4 %).
@@ -161,6 +202,8 @@ impl Channel {
             Channel::ScatterWeight => "Scattering weight",
             Channel::Transmission => "Transmission",
             Channel::CoatNormal => "Coat normal",
+            // Not "Flow": the brush already has a setting of that name
+            Channel::Flow => "Flow map",
         }
     }
 
@@ -188,6 +231,7 @@ impl Channel {
             Channel::ScatterWeight => "scatter",
             Channel::Transmission => "transm",
             Channel::CoatNormal => "coat nrm",
+            Channel::Flow => "flow map",
         }
     }
 
@@ -215,6 +259,7 @@ impl Channel {
             Channel::ScatterWeight => "scatterWeight",
             Channel::Transmission => "transmission",
             Channel::CoatNormal => "coatNormal",
+            Channel::Flow => "flow",
         }
     }
 
@@ -249,6 +294,7 @@ impl ChannelFormat {
         match c.kind() {
             ChannelKind::Color => ChannelFormat::Srgb8,
             ChannelKind::NormalMap => ChannelFormat::Rgb16F,
+            ChannelKind::Vector => ChannelFormat::Rgb16,
             ChannelKind::Scalar => ChannelFormat::L8,
             ChannelKind::Signed => ChannelFormat::L16F,
         }
@@ -302,6 +348,42 @@ mod tests {
         }
         assert_eq!(Channel::parse("sheen color"), Some(Channel::SheenColor));
         assert_eq!(Channel::parse("coatWeight"), Some(Channel::CoatWeight));
+    }
+
+    #[test]
+    fn the_flow_map_is_a_vector_appended_after_the_shader_indexed_channels() {
+        // `kind()` ends in a catch-all, so nothing but this test notices a missing arm
+        assert_eq!(Channel::Flow.kind(), ChannelKind::Vector);
+        assert_eq!(Channel::Flow.components(), 3);
+        assert_eq!(Channel::Flow.default_value(), FLOW_STILL);
+        assert_eq!(Channel::ALL.last(), Some(&Channel::Flow));
+        assert_eq!(Channel::CoatNormal.index(), 20);
+        assert!(!Channel::DEFAULT_SET.contains(&Channel::Flow));
+        assert!(!Channel::LOBES.contains(&Channel::Flow));
+        assert_eq!(Channel::parse("flow"), Some(Channel::Flow));
+        assert_eq!(Channel::parse("Flow map"), Some(Channel::Flow));
+    }
+
+    #[test]
+    fn flow_angles_turn_counter_clockwise_on_the_image_and_round_trip() {
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+
+        // Right is +U; up the image is towards smaller V
+        assert!(close(flow_from_polar(0.0, 1.0), [1.0, 0.5, 0.0]));
+        assert!(close(flow_from_polar(90.0, 1.0), [0.5, 0.0, 0.0]));
+        assert!(close(flow_from_polar(180.0, 0.5), [0.25, 0.5, 0.0]));
+        assert!(close(flow_from_polar(45.0, 0.0), FLOW_STILL));
+
+        for (angle, speed) in [(0.0, 1.0), (37.0, 0.25), (135.0, 0.8), (270.0, 0.6), (359.0, 1.0)] {
+            let (a, s) = flow_to_polar(flow_from_polar(angle, speed));
+            assert!((a - angle).abs() < 1e-3 && (s - speed).abs() < 1e-5, "{angle} {speed} -> {a} {s}");
+        }
+        assert_eq!(flow_to_polar(FLOW_STILL), (0.0, 0.0));
+
+        // Speed is clamped and hostile numbers paint nothing
+        assert!(close(flow_from_polar(0.0, 7.0), [1.0, 0.5, 0.0]));
+        assert_eq!(flow_from_polar(f32::NAN, 1.0), FLOW_STILL);
+        assert_eq!(flow_from_polar(0.0, f32::INFINITY), FLOW_STILL);
     }
 
     #[test]

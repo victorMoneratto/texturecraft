@@ -22,7 +22,7 @@ pub use bake::{
     SkewCorrectionMethod, SkewSettings, ThicknessNormalization, ThicknessSettings,
 };
 pub use blend::{BlendMode, blend1, blend3, lum, mix3};
-pub use channel::{Channel, ChannelFormat, ChannelKind};
+pub use channel::{Channel, ChannelFormat, ChannelKind, FLOW_STILL, flow_from_polar, flow_to_polar};
 pub use layer::{
     ChannelBlend, CompareOp, CurvatureDetail, CurvatureMode, Decal, DecalFlip, DecalSymmetry, Effect, EffectKind, Fill, Filter, Generator, GeneratorGlobal,
     GeneratorKind, HeightMask, Layer, LayerId, LayerKind, Levels, LinkParam, LinkPreset, Mask, MaskBackground, MaterialLink, MicroDetail, OutputResolution,

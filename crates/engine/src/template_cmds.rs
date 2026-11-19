@@ -145,7 +145,7 @@ impl Session {
                 if let Ok(l) = p.layer_mut(id) {
                     let mode = if l.is_group() { texturecraft_core::BlendMode::Passthrough } else { texturecraft_core::BlendMode::Normal };
                     l.channels.retain(|c, _| wanted.contains(c));
-                    for c in &wanted {
+                    for c in wanted.iter().filter(|c| l.kind.enables_by_default(**c)) {
                         l.channels.entry(*c).or_insert(ChannelBlend { mode, opacity: 1.0 });
                     }
                 }

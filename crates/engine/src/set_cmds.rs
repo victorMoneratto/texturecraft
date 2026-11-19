@@ -221,10 +221,12 @@ pub(crate) fn add_channel(s: &mut Session, ts: usize, c: Channel) -> Result<()> 
         set.channels.push((c, ChannelFormat::default_for(c)));
         set.channels.sort_by_key(|(c, _)| c.index());
     }
-    // Existing layers get the new channel enabled.
+    // Existing layers get the new channel enabled (fills keep out of the flow map).
     let ids: Vec<_> = s.doc.project.walk(ts).into_iter().map(|(id, _)| id).collect();
     for id in ids {
-        if let Ok(l) = s.doc.project.layer_mut(id) {
+        if let Ok(l) = s.doc.project.layer_mut(id)
+            && l.kind.enables_by_default(c)
+        {
             let mode = if l.is_group() { texturecraft_core::BlendMode::Passthrough } else { texturecraft_core::BlendMode::Normal };
             l.channels.entry(c).or_insert(ChannelBlend { mode, opacity: 1.0 });
         }

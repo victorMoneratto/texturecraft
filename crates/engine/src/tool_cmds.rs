@@ -321,9 +321,9 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
         })?;
 
         // Reset omitted channels so values from the previous brush material do not persist
-        // Normal maps remain flat
+        // Normal maps remain flat, and a material never changes the flow direction being painted
         for channel in Channel::ALL {
-            if channel.kind() == texturecraft_core::ChannelKind::NormalMap {
+            if matches!(channel.kind(), texturecraft_core::ChannelKind::NormalMap | texturecraft_core::ChannelKind::Vector) {
                 continue;
             }
 

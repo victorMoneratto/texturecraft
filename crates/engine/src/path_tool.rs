@@ -334,7 +334,9 @@ fn edit_path(s: &mut Session, p: &Value) -> Result<Value> {
     s.finish_path()?;
     set_tool(s, Tool::Path)?;
     s.tool.brush = paint.brush;
-    s.tool.values = paint.values;
+
+    // Merged, not replaced: a stored path may leave out channels it does not paint
+    s.tool.values.extend(paint.values);
     s.tool.enabled = paint.enabled;
     s.tool.mask_value = paint.mask_value;
     s.tool.path = PathState { editing: Some((eid, index)), ..state_of(&shape) };
@@ -459,7 +461,11 @@ impl Session {
     /// The Path tool's curve with the current brush and material, as painted from `camera`.
     fn path_shape(&self, camera: OrbitCamera, viewport: Vec2) -> PathShape {
         let (t, path) = (&self.tool, &self.tool.path);
-        let paint = PathPaint { brush: t.brush.clone(), values: t.values.clone(), enabled: t.enabled.clone(), mask_value: t.mask_value, camera };
+
+        // A build without the flow map cannot read a path that names it, so a path that does not
+        // paint it must not mention it: the tool holds a value for every channel
+        let values = t.values.iter().filter(|(c, _)| **c != Channel::Flow || t.enabled.contains(c)).map(|(c, v)| (*c, *v)).collect();
+        let paint = PathPaint { brush: t.brush.clone(), values, enabled: t.enabled.clone(), mask_value: t.mask_value, camera };
         PathShape {
             points: path.points.iter().map(|p| p.to_array()).collect(),
             corners: path.corner_flags(),
@@ -1005,7 +1011,7 @@ impl Session {
         let paint = read_paint(shape)?;
         let (camera, viewport) = paint_view(shape, &paint);
         self.tool.brush = paint.brush;
-        self.tool.values = paint.values;
+        self.tool.values.extend(paint.values);
         self.tool.enabled = paint.enabled;
         self.tool.mask_value = paint.mask_value;
         self.camera = camera;

@@ -789,6 +789,9 @@ fn filter_region(
         _ => 0.5,
     };
 
+    // Bevel and glow measure a value from 0, which on a packed vector is full negative flow
+    let packed_vector = matches!(job, Job::Content(channel) if channel.kind() == ChannelKind::Vector);
+
     // A smaller UV tile has fewer texels per UV unit, so its filters reach fewer texels
     let filtered = |scale: f32| -> Vec<f32> {
         let tile_resolution = ((inputs.tile_res() as f32 * scale).round() as u32).max(1);
@@ -822,6 +825,7 @@ fn filter_region(
                     let result = match op {
                         Op::Blur(Some(amount)) => original + amount * (original - blurred),
                         Op::HighPass if component < 3 => original - blurred + middle * coverage,
+                        Op::Bevel | Op::Glow(_) if packed_vector => original,
 
                         // Away from 0 by at most the value itself: 0 at the edge, full inside
                         Op::Bevel if component < 3 => original.signum() * original.abs().min((2.0 * blurred * original.signum() - original.abs()).max(0.0)),
@@ -1253,6 +1257,11 @@ fn plan_levels<'a>(inp: &Inputs<'a>, levels: &[Level], channels: &[Channel], tx:
 
 #[inline]
 fn blend_chan(c: &ChanPlan, mode: BlendMode, a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    // Blend modes work on the packed value, where a zero vector is 0.5: Add on two still texels
+    // would give full flow. A vector channel replaces whatever mode a command or a file set
+    if c.kind == ChannelKind::Vector {
+        return b;
+    }
     if c.comps == 3 { blend3(mode, a, b) } else { [blend1(mode, a[0], b[0]); 3] }
 }
 
@@ -1492,6 +1501,9 @@ impl<'a, 'b> Texel<'a, 'b> {
                     ChannelKind::NormalMap if *normal_format == NormalFormat::DirectX => [rgb[0], 1.0 - rgb[1], rgb[2]],
                     ChannelKind::Color | ChannelKind::NormalMap => rgb,
 
+                    // A flow map image holds the vector in red and green; its blue is not ours
+                    ChannelKind::Vector => [rgb[0], rgb[1], 0.0],
+
                     // A one-value channel or mask reads the image's gray, so a color image works as a mask
                     ChannelKind::Scalar => [lum(rgb); 3],
                     ChannelKind::Signed => [lum(rgb) * 2.0 - 1.0; 3],
@@ -1506,7 +1518,8 @@ impl<'a, 'b> Texel<'a, 'b> {
     /// channel default.
     fn anchor_value(&self, anchor: LayerId, channel: Channel, kind: ChannelKind) -> [f32; 3] {
         let value = self.anchored(anchor, channel);
-        let needs_gray = matches!(channel.kind(), ChannelKind::Color | ChannelKind::NormalMap) && matches!(kind, ChannelKind::Scalar | ChannelKind::Signed);
+        let needs_gray = matches!(channel.kind(), ChannelKind::Color | ChannelKind::NormalMap | ChannelKind::Vector)
+            && matches!(kind, ChannelKind::Scalar | ChannelKind::Signed);
         if needs_gray { [lum(value); 3] } else { value }
     }
 
@@ -2705,7 +2718,7 @@ pub fn effect_histogram(inp: &Inputs, effect: LayerId, channel: Channel, bins: u
                         ChannelKind::Color => (&v[..], false),
                         ChannelKind::Scalar => (&v[..1], false),
                         ChannelKind::Signed => (&v[..1], true),
-                        ChannelKind::NormalMap => (&v[..0], false),
+                        ChannelKind::NormalMap | ChannelKind::Vector => (&v[..0], false),
                     };
                     for x in vals {
                         if let Some(b) = h.get_mut(bin(if signed { x * 0.5 + 0.5 } else { *x })) {

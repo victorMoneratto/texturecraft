@@ -122,6 +122,13 @@ pub enum LayerKind {
 }
 
 impl LayerKind {
+    /// Whether a layer of this kind gets channel `c` when the layer is created or the channel is
+    /// added to its set. A fill writes every enabled channel under its whole mask, so a material
+    /// or grime fill would reset the flow map below it to still: fills get it only when asked
+    pub fn enables_by_default(&self, c: Channel) -> bool {
+        c != Channel::Flow || !matches!(self, LayerKind::Fill(_))
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             LayerKind::Paint => "paint",
@@ -135,12 +142,13 @@ impl LayerKind {
 impl Layer {
     /// A layer with every channel of `channels` enabled at Normal/100%.
     pub fn new(id: LayerId, name: impl Into<String>, kind: LayerKind, channels: &[Channel]) -> Layer {
+        let blends = channels.iter().filter(|c| kind.enables_by_default(**c)).map(|c| (*c, ChannelBlend::default())).collect();
         Layer {
             id,
             name: name.into(),
             visible: true,
             kind,
-            channels: channels.iter().map(|c| (*c, ChannelBlend::default())).collect(),
+            channels: blends,
             mask: None,
             content_effects: Vec::new(),
             color_tag: None,
@@ -983,10 +991,10 @@ pub fn hsl_adjust(rgb: [f32; 3], hue: f32, saturation: f32, lightness: f32) -> [
 }
 
 /// Apply a 0..1 function to each component of a channel value: signed values map through
-/// 0..1, normals are left alone.
+/// 0..1, normals and vectors are left alone (a tone curve has no meaning on a direction).
 pub fn per_unit(kind: ChannelKind, v: [f32; 3], f: impl Fn(f32) -> f32) -> [f32; 3] {
     match kind {
-        ChannelKind::NormalMap => v,
+        ChannelKind::NormalMap | ChannelKind::Vector => v,
         // One-component channels hold their value in the first slot (read as gray).
         ChannelKind::Signed => [f(v[0] * 0.5 + 0.5) * 2.0 - 1.0; 3],
         ChannelKind::Scalar => [f(v[0]); 3],

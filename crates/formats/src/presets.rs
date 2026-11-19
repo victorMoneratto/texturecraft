@@ -45,6 +45,9 @@ fn normal(map_kind: VirtualMap) -> Vec<(Dest, SourceRef)> {
 fn channel_map(c: Channel) -> MapSpec {
     let (channels, depth) = match c.kind() {
         ChannelKind::Color | ChannelKind::NormalMap => (rgb(|k| ch(c, k)), 8),
+
+        // Red and green hold the vector; blue is free for a mask packed in an output template
+        ChannelKind::Vector => (rgb(|k| if k < 2 { ch(c, k) } else { SourceRef::Constant(0.0) }), 8),
         ChannelKind::Signed => (gray(ch(c, 0)), 16),
         ChannelKind::Scalar => (gray(ch(c, 0)), 8),
     };
