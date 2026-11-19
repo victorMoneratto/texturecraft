@@ -121,7 +121,7 @@ fn a_ui_state_change_by_command_keeps_the_flow_map_displayed() {
     let (session, _) = flow_session();
     let mut harness = harness(session, Channel::BaseColor);
     let context = egui::Context::default();
-    let mut set = |harness: &mut Harness<'_, TextureCraftApp>, patch: serde_json::Value| {
+    let set = |harness: &mut Harness<'_, TextureCraftApp>, patch: serde_json::Value| {
         let reply = texturecraft_ui_egui::control::handle(harness.state_mut(), &context, "ui.set", &patch);
         assert_eq!(reply["ok"], true, "{reply}");
     };
