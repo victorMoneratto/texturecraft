@@ -69,7 +69,9 @@ pub fn flow_to_polar(value: [f32; 3]) -> (f32, f32) {
         return (0.0, 0.0);
     }
 
-    ((-y).atan2(x).to_degrees().rem_euclid(360.0), speed.min(1.0))
+    // A flow straight to the right has y at negative zero: an editor would show its angle as -0
+    let angle_degrees = (-y).atan2(x).to_degrees().rem_euclid(360.0);
+    (if angle_degrees == 0.0 { 0.0 } else { angle_degrees }, speed.min(1.0))
 }
 
 /// Below this length a flow vector has no usable direction (16-bit storage keeps about 1/32768)
@@ -379,6 +381,10 @@ mod tests {
             assert!((a - angle).abs() < 1e-3 && (s - speed).abs() < 1e-5, "{angle} {speed} -> {a} {s}");
         }
         assert_eq!(flow_to_polar(FLOW_STILL), (0.0, 0.0));
+
+        // Pointing right reads as a plain zero, not the negative zero its y component gives
+        assert!(flow_to_polar(flow_from_polar(0.0, 1.0)).0.is_sign_positive());
+        assert_eq!(format!("{:.0}", flow_to_polar(flow_from_polar(0.0, 0.5)).0), "0");
 
         // Speed is clamped and hostile numbers paint nothing
         assert!(close(flow_from_polar(0.0, 7.0), [1.0, 0.5, 0.0]));
