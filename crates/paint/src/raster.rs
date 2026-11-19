@@ -10,6 +10,7 @@ use texturecraft_geom::{Bvh, Mesh, NO_TRI, UvGBuffer};
 use texturecraft_texel::{TILE, TileImage, from_u16, to_u16};
 
 use crate::brush::Shape;
+use crate::flow_producer::FlowProducer;
 use crate::pickup::Pickup;
 use crate::stamp_source::StampSource;
 use crate::stroke::Stamp;
@@ -30,11 +31,25 @@ pub struct StrokeCanvas {
     pub pickup: Option<Pickup>,
     /// The stamp being added: `(x, y, alpha)` per texel (reused between stamps).
     texels: Vec<(u32, u32, f32)>,
+    /// A stroke that paints its own direction into the flow map: that channel's coverage and
+    /// values come from here instead of `alpha`.
+    pub flow: Option<FlowProducer>,
+    /// With `flow`: the unit direction in texels of each entry of `texels` (`[0, 0]`: none).
+    directions: Vec<[f32; 2]>,
 }
 
 impl StrokeCanvas {
     pub fn new(width: u32, height: u32) -> StrokeCanvas {
-        StrokeCanvas { alpha: TileImage::new(width, height, 1), dirty: BTreeSet::new(), recent: BTreeSet::new(), limit: None, pickup: None, texels: Vec::new() }
+        StrokeCanvas {
+            alpha: TileImage::new(width, height, 1),
+            dirty: BTreeSet::new(),
+            recent: BTreeSet::new(),
+            limit: None,
+            pickup: None,
+            texels: Vec::new(),
+            flow: None,
+            directions: Vec::new(),
+        }
     }
 
     /// Start over when the canvas is not the size of `gbuf`.
@@ -52,8 +67,9 @@ impl StrokeCanvas {
 
     /// Blend the gathered stamp texels (stamp center `center` in texels) into the stroke: the
     /// quick mask scales them, then the pickup deposits its values or the alpha accumulates
-    /// ("over": `m = a + m·(1 − a)`).
-    fn add_stamp(&mut self, center: [f32; 2], source: Option<StampSource>) {
+    /// ("over": `m = a + m·(1 − a)`). `dab` numbers the stroke's dabs for the flow map (None: a
+    /// fill, which has no direction).
+    fn add_stamp(&mut self, center: [f32; 2], source: Option<StampSource>, dab: Option<u32>) {
         let mut texels = std::mem::take(&mut self.texels);
         if let Some((mask, invert)) = &self.limit {
             for t in &mut texels {
@@ -71,7 +87,14 @@ impl StrokeCanvas {
                 true
             }
         };
-        if painted {
+
+        // After the quick mask, so a masked texel takes no direction either
+        let flow_painted = match (&mut self.flow, dab) {
+            (Some(flow), Some(dab)) => flow.deposit(&texels, &self.directions, dab),
+            _ => false,
+        };
+        self.directions.clear();
+        if painted || flow_painted {
             for &(x, y, a) in &texels {
                 if a > 0.0 {
                     self.touch(x, y);
@@ -201,7 +224,8 @@ pub fn rasterize(canvas: &mut StrokeCanvas, context: &RasterCtx, stamps: &[Stamp
         context.bvh.query_box(stamp.center - extent, stamp.center + extent, |triangle| triangles.push(triangle));
 
         // Each texel belongs to one triangle, so large stamps can scan triangles in parallel
-        let scan = |&triangle: &u32| scan_triangle(context, stamp, triangle, width, height, fade_lo, fade_hi, pixels_per_unit);
+        let directed = canvas.flow.is_some();
+        let scan = |&triangle: &u32| scan_triangle(context, stamp, triangle, width, height, fade_lo, fade_hi, pixels_per_unit, directed);
         let parts: Vec<TriTexels> = if triangles.len() > PARALLEL_TRIANGLE_THRESHOLD {
             triangles.par_iter().filter_map(scan).collect()
         } else {
@@ -210,19 +234,24 @@ pub fn rasterize(canvas: &mut StrokeCanvas, context: &RasterCtx, stamps: &[Stamp
 
         // The footprint texel nearest the stamp center supplies the pickup's center
         let mut center = ([0.0f32; 2], f32::MAX);
-        for (texels, nearest) in parts {
+        for (texels, nearest, direction) in parts {
             if nearest.1 < center.1 {
                 center = nearest;
+            }
+            if directed {
+                canvas.directions.resize(canvas.directions.len() + texels.len(), direction);
             }
             canvas.texels.extend(texels);
         }
 
-        canvas.add_stamp(center.0, stamp.source);
+        // Copies of a dab share its seed, which counts the stroke's dabs
+        canvas.add_stamp(center.0, stamp.source, Some(stamp.seed));
     }
 }
 
-/// Texels of one triangle a stamp covers, and the one nearest the stamp center.
-type TriTexels = (Vec<(u32, u32, f32)>, ([f32; 2], f32));
+/// Texels of one triangle a stamp covers, the one nearest the stamp center, and the stamp's
+/// travel on the triangle as a unit direction in texels (`[0, 0]`: none).
+type TriTexels = (Vec<(u32, u32, f32)>, ([f32; 2], f32), [f32; 2]);
 
 #[allow(clippy::too_many_arguments)]
 fn scan_triangle(
@@ -234,6 +263,7 @@ fn scan_triangle(
     fade_lo: f32,
     fade_hi: f32,
     pixels_per_unit: f32,
+    directed: bool,
 ) -> Option<TriTexels> {
     if context.mesh.material_of(triangle as usize) != Some(context.material) {
         return None;
@@ -316,7 +346,13 @@ fn scan_triangle(
         }
     }
 
-    (center.1 < f32::MAX || !texels.is_empty()).then_some((texels, center))
+    // One direction for the triangle: its chart turns the stamp's travel one way
+    let travel = if directed && !texels.is_empty() { stamp.travel } else { None };
+    let direction = travel.and_then(|travel| {
+        travel.in_texels([*position_a, *position_b, *position_c], [*uv_a, *uv_b, *uv_c], *normal_a + *normal_b + *normal_c, (width, height))
+    });
+
+    (center.1 < f32::MAX || !texels.is_empty()).then_some((texels, center, direction.unwrap_or_default()))
 }
 
 /// Stroke alpha covering whole triangles (polygon fill): every texel of `tris` gets alpha 1.
@@ -339,7 +375,7 @@ pub fn fill_coverage(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, coverage: impl
             (a > 0.0).then_some(((i as u32) % w, (i as u32) / w, a))
         })
         .collect();
-    canvas.add_stamp([0.0; 2], None);
+    canvas.add_stamp([0.0; 2], None, None);
 }
 
 #[cfg(test)]
@@ -827,6 +863,7 @@ pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, s
         let y1 = ((cy + r * 1.42).ceil().max(0.0) as u32).min(h);
         let (sn, cs) = s.angle.to_radians().sin_cos();
         let shape = shape.at_radius(r);
+        let direction = s.travel.filter(|_| canvas.flow.is_some()).and_then(|travel| crate::travel::uv_travel_in_texels(travel, (w, h)));
         for y in y0..y1 {
             for x in x0..x1 {
                 if gbuf.tri.get((y * w + x) as usize).copied().unwrap_or(NO_TRI) == NO_TRI {
@@ -842,6 +879,9 @@ pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, s
                 }
             }
         }
-        canvas.add_stamp([cx, cy], s.source);
+        if let Some(direction) = direction {
+            canvas.directions.resize(canvas.texels.len(), direction);
+        }
+        canvas.add_stamp([cx, cy], s.source, Some(s.seed));
     }
 }
