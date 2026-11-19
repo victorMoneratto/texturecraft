@@ -241,3 +241,90 @@ fn a_tool_that_does_not_stroke_shows_the_direction_it_paints() {
     assert!(harness.query_by_label("Follow stroke").is_none());
     assert_eq!((field_text(&harness, "Flow direction").as_str(), field_text(&harness, "Flow speed").as_str()), ("0", "1.00"));
 }
+
+#[test]
+fn the_brush_sliders_go_through_the_material_command() {
+    let mut session = flow_session();
+    execute(&mut session, "tool.material", &json!({"material": "steel"})).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": 120.0, "speed": 0.5, "solo": true})).unwrap();
+    let mut harness = harness(session);
+    harness.state_mut().ui.props_tab = PropsTab::Material;
+    harness.run_steps(SETTLE_FRAMES);
+    let revision = harness.state().session.revision;
+
+    type_value(&mut harness, "Flow speed", "0");
+    type_value(&mut harness, "Flow direction", "200");
+
+    // A command counts a change of the tool; a value written past it does not
+    assert!(harness.state().session.revision >= revision + 2, "each slider change is a tool.material command");
+    assert_eq!(brush_flow(&harness), FLOW_STILL);
+
+    // The tool holds the direction, not the panel: its own report shows it, as a command's reply would
+    let state = execute(&mut harness.state_mut().session, "tool.state", &Value::Null).unwrap();
+    assert_eq!(state["flow"], json!({"follow": false, "angle": 200.0, "speed": 0.0, "value": FLOW_STILL}));
+    assert_eq!(state["material"], json!("steel"), "a direction keeps the brush material, from the panel as from a command");
+
+    // The same edits by command leave the same tool
+    let mut by_command = flow_session();
+    execute(&mut by_command, "tool.material", &json!({"material": "steel"})).unwrap();
+    execute(&mut by_command, "tool.material", &json!({"channel": "flow", "angle": 120.0, "speed": 0.5, "solo": true})).unwrap();
+    execute(&mut by_command, "tool.material", &json!({"channel": "flow", "speed": 0.0})).unwrap();
+    execute(&mut by_command, "tool.material", &json!({"channel": "flow", "angle": 200.0})).unwrap();
+    let commanded = execute(&mut by_command, "tool.state", &Value::Null).unwrap();
+    for field in ["flow", "values", "enabled", "material", "flow_follow", "flow_angle"] {
+        assert_eq!(commanded[field], state[field], "{field}");
+    }
+}
+
+#[test]
+fn the_brush_direction_at_rest_outlives_the_panel() {
+    let mut session = flow_session();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": 120.0, "speed": 0.5, "solo": true})).unwrap();
+    let mut first = harness(session);
+    first.state_mut().ui.props_tab = PropsTab::Material;
+    first.run_steps(SETTLE_FRAMES);
+    type_value(&mut first, "Flow speed", "0");
+    type_value(&mut first, "Flow direction", "200");
+    let tool = first.state().session.tool.clone();
+    drop(first);
+
+    // Another window on the same tool has none of the first one's memory
+    let mut session = flow_session();
+    session.tool = tool;
+    let mut second = harness(session);
+    second.state_mut().ui.props_tab = PropsTab::Material;
+    second.run_steps(SETTLE_FRAMES);
+
+    assert_eq!((field_text(&second, "Flow direction").as_str(), field_text(&second, "Flow speed").as_str()), ("200", "0.00"));
+    type_value(&mut second, "Flow speed", "1");
+    assert!(close(brush_flow(&second), flow_from_polar(200.0, 1.0)), "{:?}", brush_flow(&second));
+}
+
+#[test]
+fn turning_the_direction_of_a_tool_that_does_not_stroke_keeps_strokes_following() {
+    let mut harness = brush_harness("tool.polygonFill");
+
+    type_value(&mut harness, "Flow direction", "90");
+
+    assert!(close(brush_flow(&harness), flow_from_polar(90.0, 1.0)), "{:?}", brush_flow(&harness));
+    assert!(harness.state().session.tool.flow_follow, "the switch the panel does not show here stays as it was");
+}
+
+#[test]
+fn a_still_fill_takes_a_direction_and_a_speed_in_one_change() {
+    let mut session = flow_session();
+    let layer = LayerId(execute(&mut session, "layer.add.fill", &Value::Null).unwrap()["layer"].as_u64().unwrap());
+    execute(&mut session, "layer.fill.set", &json!({"layer": layer.0, "channel": "flow", "enabled": true})).unwrap();
+    let mut harness = harness(session);
+    harness.get_by_label("Flow direction").scroll_to_me();
+    harness.run_steps(SCROLL_FRAMES);
+    assert_eq!((field_text(&harness, "Flow direction").as_str(), field_text(&harness, "Flow speed").as_str()), ("0", "0.00"));
+
+    // A direction alone is not refused by the editor: it sends the speed with it, and keeps the direction
+    type_value(&mut harness, "Flow direction", "270");
+    assert!(close(fill_flow(&harness, layer), FLOW_STILL), "{:?}", fill_flow(&harness, layer));
+    assert_eq!(field_text(&harness, "Flow direction"), "270");
+
+    type_value(&mut harness, "Flow speed", "0.75");
+    assert!(close(fill_flow(&harness, layer), flow_from_polar(270.0, 0.75)), "{:?}", fill_flow(&harness, layer));
+}
