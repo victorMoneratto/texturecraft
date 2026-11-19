@@ -1053,3 +1053,28 @@ fn padding_carries_the_flow_of_the_island_and_leaves_the_rest_still() {
         }
     }
 }
+
+#[test]
+fn still_water_stays_exactly_still_when_the_export_is_resized() {
+    let mut fx = flow_fx(0.0, 0.0);
+    for (x, y) in HOLE.flat_map(|y| HOLE.map(move |x| (x, y))) {
+        fx.coverage[(y * RES + x) as usize] = false;
+    }
+
+    // Sizes are powers of two: halved and quartered (a box filter), doubled and quadrupled (bilinear)
+    for size in [RES / 2, RES / 4, 2 * RES, 4 * RES] {
+        for padding in [Padding::None, Padding::Infinite] {
+            for bit_depth in [8, 16, 32] {
+                for flip_green in [false, true] {
+                    let mut options = flow_kind_options(bit_depth, flip_green, padding);
+                    options.size = Some(size);
+                    let texels = flow_file_texels(&fx.render(&options)[0], bit_depth);
+
+                    assert_eq!(texels.len(), (size * size) as usize);
+                    let moving = texels.iter().find(|texel| **texel != still_in_file(bit_depth));
+                    assert_eq!(moving, None, "{size} wide, {padding:?}, {bit_depth} bit, flipped: {flip_green}");
+                }
+            }
+        }
+    }
+}
