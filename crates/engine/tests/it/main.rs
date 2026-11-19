@@ -23,6 +23,7 @@ mod flow_follow_tools;
 mod flow_map;
 mod flow_mirror;
 mod flow_ops;
+mod flow_stroke_ends;
 mod frame_selection;
 mod generator_inputs;
 mod gradient_map;

@@ -26,6 +26,7 @@ pub mod stroke;
 pub mod text;
 pub mod travel;
 pub mod visibility;
+mod waiting_dabs;
 
 pub use alpha_params::AlphaParams;
 pub use brush::{Alignment, BrushAlpha, BrushSettings, FULL_TURN_DEGREES, MAX_RADIAL_COPIES, Particles, Shape, Symmetry, image_alpha};

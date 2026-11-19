@@ -15,6 +15,7 @@ use crate::pickup::Pickup;
 use crate::stamp_source::StampSource;
 use crate::stroke::Stamp;
 use crate::visibility::EyeDepth;
+use crate::waiting_dabs::WaitingDabs;
 
 /// The stroke alpha being accumulated for one texture set.
 #[derive(Clone, Debug)]
@@ -36,6 +37,11 @@ pub struct StrokeCanvas {
     pub flow: Option<FlowProducer>,
     /// With `flow`: the unit direction in texels of each entry of `texels` (`[0, 0]`: none).
     directions: Vec<[f32; 2]>,
+    /// With `flow`: dabs painted without travel, which the flow map takes when the next dab
+    /// tells the way the stroke left them (3D view)
+    first_dabs: WaitingDabs<Stamp>,
+    /// The same for dabs of the 2D view
+    first_uv_dabs: WaitingDabs<UvStamp>,
 }
 
 impl StrokeCanvas {
@@ -49,6 +55,8 @@ impl StrokeCanvas {
             texels: Vec::new(),
             flow: None,
             directions: Vec::new(),
+            first_dabs: WaitingDabs::default(),
+            first_uv_dabs: WaitingDabs::default(),
         }
     }
 
@@ -71,12 +79,7 @@ impl StrokeCanvas {
     /// fill, which has no direction).
     fn add_stamp(&mut self, center: [f32; 2], source: Option<StampSource>, dab: Option<u32>) {
         let mut texels = std::mem::take(&mut self.texels);
-        if let Some((mask, invert)) = &self.limit {
-            for t in &mut texels {
-                let m = from_u16(mask.get(t.0, t.1)[0]);
-                t.2 *= if *invert { 1.0 - m } else { m };
-            }
-        }
+        self.limit_to_quick_mask(&mut texels);
         let painted = match &mut self.pickup {
             Some(p) => p.stamp(&mut self.alpha, &texels, center, source),
             None => {
@@ -101,6 +104,36 @@ impl StrokeCanvas {
                 }
             }
         }
+        texels.clear();
+        self.texels = texels;
+    }
+
+    /// Scale stamp `texels` by the quick mask, when the stroke is limited to one
+    fn limit_to_quick_mask(&self, texels: &mut [(u32, u32, f32)]) {
+        if let Some((mask, invert)) = &self.limit {
+            for t in texels {
+                let m = from_u16(mask.get(t.0, t.1)[0]);
+                t.2 *= if *invert { 1.0 - m } else { m };
+            }
+        }
+    }
+
+    /// Give the flow map the gathered texels of dab number `dab` with the directions gathered
+    /// beside them. The stroke alpha and the pickup took the dab when it was painted; it had no
+    /// travel then, and the dab after it has now told which way the stroke left it.
+    fn add_late_direction(&mut self, dab: u32) {
+        let mut texels = std::mem::take(&mut self.texels);
+        self.limit_to_quick_mask(&mut texels);
+        if let Some(flow) = &mut self.flow
+            && flow.deposit(&texels, &self.directions, dab)
+        {
+            for &(x, y, a) in &texels {
+                if a > 0.0 {
+                    self.touch(x, y);
+                }
+            }
+        }
+        self.directions.clear();
         texels.clear();
         self.texels = texels;
     }
@@ -214,17 +247,15 @@ pub fn rasterize(canvas: &mut StrokeCanvas, context: &RasterCtx, stamps: &[Stamp
     });
 
     let mut triangles = Vec::new();
-    for stamp in stamps {
-        if stamp.radius.is_nan() || stamp.radius <= 0.0 || !stamp.center.is_finite() {
-            continue;
-        }
+    let directed = canvas.flow.is_some();
 
+    // Gather the texels `stamp` covers, and their directions, into `canvas`: the pickup's center
+    let mut gather = |canvas: &mut StrokeCanvas, stamp: &Stamp| {
         let extent = Vec3::splat(stamp.radius * stamp.depth.max(1.0) * STAMP_QUERY_PADDING);
         triangles.clear();
         context.bvh.query_box(stamp.center - extent, stamp.center + extent, |triangle| triangles.push(triangle));
 
         // Each texel belongs to one triangle, so large stamps can scan triangles in parallel
-        let directed = canvas.flow.is_some();
         let scan = |&triangle: &u32| scan_triangle(context, stamp, triangle, width, height, fade_lo, fade_hi, pixels_per_unit, directed);
         let parts: Vec<TriTexels> = if triangles.len() > PARALLEL_TRIANGLE_THRESHOLD {
             triangles.par_iter().filter_map(scan).collect()
@@ -243,9 +274,30 @@ pub fn rasterize(canvas: &mut StrokeCanvas, context: &RasterCtx, stamps: &[Stamp
             }
             canvas.texels.extend(texels);
         }
+        center.0
+    };
+
+    for stamp in stamps {
+        if stamp.radius.is_nan() || stamp.radius <= 0.0 || !stamp.center.is_finite() {
+            continue;
+        }
+
+        // A dab without travel waits; the dab after it gives its footprint the way the stroke
+        // went on, so the flow map is covered from the stroke's first dab
+        match stamp.travel {
+            _ if !directed => {}
+            None => canvas.first_dabs.hold(stamp.seed, stamp.source, *stamp),
+            Some(_) => {
+                if let Some(first) = canvas.first_dabs.take_before(stamp.seed, stamp.source) {
+                    gather(canvas, &Stamp { travel: stamp.travel, ..first });
+                    canvas.add_late_direction(first.seed);
+                }
+            }
+        }
 
         // Copies of a dab share its seed, which counts the stroke's dabs
-        canvas.add_stamp(center.0, stamp.source, Some(stamp.seed));
+        let center = gather(canvas, stamp);
+        canvas.add_stamp(center, stamp.source, Some(stamp.seed));
     }
 }
 
@@ -851,11 +903,10 @@ pub struct UvStamp {
 pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, stamps: &[UvStamp]) {
     let (w, h) = (gbuf.width, gbuf.height);
     canvas.fit(gbuf);
-    for s in stamps {
-        if s.radius.is_nan() || s.radius <= 0.0 || !s.center.is_finite() {
-            continue;
-        }
+    let directed = canvas.flow.is_some();
 
+    // Gather the texels `s` covers, and their direction, into `canvas`: the stamp's center in texels
+    let gather = |canvas: &mut StrokeCanvas, s: &UvStamp| {
         let (cx, cy, r) = (s.center.x * w as f32, s.center.y * h as f32, s.radius * w as f32);
         let x0 = (cx - r * 1.42).floor().max(0.0) as u32;
         let x1 = ((cx + r * 1.42).ceil().max(0.0) as u32).min(w);
@@ -863,7 +914,7 @@ pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, s
         let y1 = ((cy + r * 1.42).ceil().max(0.0) as u32).min(h);
         let (sn, cs) = s.angle.to_radians().sin_cos();
         let shape = shape.at_radius(r);
-        let direction = s.travel.filter(|_| canvas.flow.is_some()).and_then(|travel| crate::travel::uv_travel_in_texels(travel, (w, h)));
+        let direction = s.travel.filter(|_| directed).and_then(|travel| crate::travel::uv_travel_in_texels(travel, (w, h)));
         for y in y0..y1 {
             for x in x0..x1 {
                 if gbuf.tri.get((y * w + x) as usize).copied().unwrap_or(NO_TRI) == NO_TRI {
@@ -882,6 +933,27 @@ pub fn rasterize_uv(canvas: &mut StrokeCanvas, gbuf: &UvGBuffer, shape: Shape, s
         if let Some(direction) = direction {
             canvas.directions.resize(canvas.texels.len(), direction);
         }
-        canvas.add_stamp([cx, cy], s.source, Some(s.seed));
+        [cx, cy]
+    };
+
+    for s in stamps {
+        if s.radius.is_nan() || s.radius <= 0.0 || !s.center.is_finite() {
+            continue;
+        }
+
+        // As in the 3D view: the first dab takes the way the stroke left it
+        match s.travel {
+            _ if !directed => {}
+            None => canvas.first_uv_dabs.hold(s.seed, s.source, *s),
+            Some(_) => {
+                if let Some(first) = canvas.first_uv_dabs.take_before(s.seed, s.source) {
+                    gather(canvas, &UvStamp { travel: s.travel, ..first });
+                    canvas.add_late_direction(first.seed);
+                }
+            }
+        }
+
+        let center = gather(canvas, s);
+        canvas.add_stamp(center, s.source, Some(s.seed));
     }
 }

@@ -207,3 +207,68 @@ fn a_fill_stores_no_direction() {
     assert!(stroke_alpha(&canvas, 0.5, 0.5) > 0.99, "the fill covers the floor");
     assert!(!canvas.flow.as_ref().unwrap().has_coverage());
 }
+
+/// A stroke's first dab at x = -0.4 (u = 0.3) and its second a little further on, heading
+/// (0.6, 0.8) in the texture; where only the first reaches is u = 0.21
+fn first_two_dabs() -> (Stamp, Stamp) {
+    let first = Stamp { travel: None, seed: 0, ..dab(Vec3::new(-0.4, 0.0, 0.0), Vec3::X, 0.2) };
+    let second = Stamp { seed: 1, ..dab(Vec3::new(-0.36, 0.0, 0.0), Vec3::new(0.6, 0.0, 0.8), 0.2) };
+    (first, second)
+}
+
+const ONLY_THE_FIRST_DAB: f32 = 0.21;
+
+#[test]
+fn a_first_dab_takes_the_way_the_stroke_left_it() {
+    let mesh = quads(&[(floor(Vec2::splat(-1.0), Vec2::ONE), chart(Vec2::ZERO, Vec2::ONE))]);
+    let (first, second) = first_two_dabs();
+
+    // The dabs of a slow drag arrive one call at a time
+    let canvas = paint(&mesh, flow_canvas(), &[first]);
+    assert!(stroke_alpha(&canvas, ONLY_THE_FIRST_DAB, 0.5) > 0.5, "the other channels have the first dab at once");
+    assert_eq!(stored(&canvas, ONLY_THE_FIRST_DAB, 0.5), None, "it was heading nowhere yet");
+    let alpha_of_first = stroke_alpha(&canvas, ONLY_THE_FIRST_DAB, 0.5);
+
+    let canvas = paint(&mesh, canvas, &[second]);
+    assert!(close(stored(&canvas, ONLY_THE_FIRST_DAB, 0.5), Vec2::new(0.6, 0.8)), "{:?}", stored(&canvas, ONLY_THE_FIRST_DAB, 0.5));
+    assert_eq!(stroke_alpha(&canvas, ONLY_THE_FIRST_DAB, 0.5), alpha_of_first, "the stroke alpha is not painted twice");
+
+    // The flow map covers the first dab as the stroke alpha does
+    let flow_coverage = from_u16(canvas.flow.as_ref().unwrap().coverage.get((ONLY_THE_FIRST_DAB * SIZE as f32) as u32, SIZE / 2)[0]);
+    assert!((flow_coverage - alpha_of_first).abs() < 1e-4, "{flow_coverage} {alpha_of_first}");
+}
+
+#[test]
+fn a_first_dab_waits_for_the_next_dab_of_its_own_copy() {
+    let mesh = quads(&[(floor(Vec2::splat(-1.0), Vec2::ONE), chart(Vec2::ZERO, Vec2::ONE))]);
+    let (first, second) = first_two_dabs();
+
+    // A dab further on in the stroke did not leave the first one
+    let skipped = paint(&mesh, flow_canvas(), &[first, Stamp { seed: 5, ..second }]);
+    assert_eq!(stored(&skipped, ONLY_THE_FIRST_DAB, 0.5), None);
+
+    // Nor did the next dab of a symmetry copy
+    let copy = texturecraft_paint::StampSource { origin: Vec3::ZERO, to_source: texturecraft_geom::glam::Mat3::IDENTITY };
+    let other_copy = paint(&mesh, flow_canvas(), &[first, Stamp { source: Some(copy), ..second }]);
+    assert_eq!(stored(&other_copy, ONLY_THE_FIRST_DAB, 0.5), None);
+
+    // The copy's own first dab is taken by the copy's next dab, in the order a batch brings them
+    let first_of_copy = Stamp { source: Some(copy), ..first };
+    let both = paint(&mesh, flow_canvas(), &[first, first_of_copy, second, Stamp { source: Some(copy), ..second }]);
+    assert!(close(stored(&both, ONLY_THE_FIRST_DAB, 0.5), Vec2::new(0.6, 0.8)));
+}
+
+#[test]
+fn the_quick_mask_limits_the_first_dab_too() {
+    let mesh = quads(&[(floor(Vec2::splat(-1.0), Vec2::ONE), chart(Vec2::ZERO, Vec2::ONE))]);
+    let (first, second) = first_two_dabs();
+
+    // Closed everywhere
+    let mut canvas = flow_canvas();
+    canvas.limit = Some((TileImage::new(SIZE, SIZE, 1), false));
+
+    let canvas = paint(&mesh, canvas, &[first, second]);
+
+    assert_eq!(stored(&canvas, ONLY_THE_FIRST_DAB, 0.5), None);
+    assert!(!canvas.flow.as_ref().unwrap().has_coverage());
+}
