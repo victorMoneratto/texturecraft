@@ -1,6 +1,9 @@
 use egui::Ui;
-use texturecraft_engine::core::{flow_from_polar, flow_to_polar};
+use serde_json::json;
+use texturecraft_engine::core::{Channel, flow_from_polar, flow_to_polar};
+use texturecraft_engine::flow_stroke::{can_follow_stroke, follows_stroke};
 
+use crate::TextureCraftApp;
 use crate::i18n::tr;
 use crate::widgets::slider_edit;
 
@@ -24,11 +27,18 @@ impl FlowEdit {
     /// names the editor: a still value has no direction, so the direction last shown there
     /// is kept in egui's memory and the slider stays where it was put.
     pub(crate) fn sliders(ui: &mut Ui, id: egui::Id, value: [f32; 3]) -> Option<FlowEdit> {
+        Self::sliders_with(ui, id, value, true)
+    }
+
+    /// [`FlowEdit::sliders`], without the direction slider unless `fixed_direction`: a brush
+    /// whose strokes paint the way they went has no use for one. The speed slider stays, and
+    /// the direction last shown is kept under the speed it changes.
+    fn sliders_with(ui: &mut Ui, id: egui::Id, value: [f32; 3], fixed_direction: bool) -> Option<FlowEdit> {
         let (stored_angle, mut speed) = flow_to_polar(value);
         let remembered = ui.data(|data| data.get_temp::<f32>(id));
         let mut angle_degrees = shown_angle(remembered, stored_angle, speed);
 
-        let turned = slider_edit(ui, tr("Flow direction"), &mut angle_degrees, 0.0..=360.0, 0);
+        let turned = if fixed_direction { slider_edit(ui, tr("Flow direction"), &mut angle_degrees, 0.0..=360.0, 0) } else { None };
         let paced = slider_edit(ui, tr("Flow speed"), &mut speed, 0.0..=1.0, 2);
         ui.data_mut(|data| data.insert_temp(id, angle_degrees));
 
@@ -38,6 +48,25 @@ impl FlowEdit {
     /// The packed flow map value of the change
     pub(crate) fn value(&self) -> [f32; 3] {
         flow_from_polar(self.angle_degrees, self.speed)
+    }
+}
+
+/// The brush's flow map controls for `channel`, whose painted value is `value`: for a tool that
+/// strokes, whether its strokes paint the way they travel, then the speed, and the fixed
+/// direction only while it is what gets painted.
+pub(crate) fn brush_controls(app: &mut TextureCraftApp, ui: &mut Ui, channel: Channel, value: [f32; 3]) {
+    if can_follow_stroke(&app.session.tool) {
+        let mut follow = app.session.tool.flow_follow;
+        let hint = tr("Paint the direction the stroke travels. Off: paint one fixed direction");
+        if ui.checkbox(&mut follow, tr("Follow stroke")).on_hover_text(hint).changed() {
+            app.run("tool.material", json!({"channel": channel.id(), "follow": follow}));
+        }
+    }
+
+    let fixed_direction = !follows_stroke(&app.session.tool);
+    let id = egui::Id::unique(("tool_flow_direction", channel.id()));
+    if let Some(edit) = FlowEdit::sliders_with(ui, id, value, fixed_direction) {
+        app.session.tool.values.insert(channel, edit.value());
     }
 }
 

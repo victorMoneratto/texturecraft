@@ -2541,11 +2541,7 @@ fn material_controls(app: &mut TextureCraftApp, ui: &mut Ui) {
             ChannelKind::NormalMap => {
                 ui.label(RichText::new(tr("Normal: painting uses the flat normal")).color(tokens.text_dim));
             }
-            ChannelKind::Vector => {
-                if let Some(edit) = crate::flow_edit::FlowEdit::sliders(ui, egui::Id::unique(("tool_flow_direction", channel.id())), value) {
-                    app.session.tool.values.insert(channel, edit.value());
-                }
-            }
+            ChannelKind::Vector => crate::flow_edit::brush_controls(app, ui, channel, value),
             ChannelKind::Signed => {
                 if slider(ui, tr(channel.label()), &mut value[0], -1.0..=1.0, 2).changed() {
                     app.session.tool.values.insert(channel, [value[0]; 3]);

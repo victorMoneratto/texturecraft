@@ -193,3 +193,51 @@ fn a_fill_layer_sets_its_flow_by_direction_and_speed() {
     type_value(&mut harness, "Flow speed", "0.5");
     assert!(close(fill_flow(&harness, layer), flow_from_polar(90.0, 0.5)), "{:?}", fill_flow(&harness, layer));
 }
+
+/// A project whose brush paints the flow map alone, with the brush's material shown
+fn brush_harness(tool: &str) -> Harness<'static, TextureCraftApp> {
+    let mut session = flow_session();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "solo": true})).unwrap();
+    execute(&mut session, tool, &Value::Null).unwrap();
+    let mut harness = harness(session);
+    harness.state_mut().ui.props_tab = PropsTab::Material;
+    harness.run_steps(SETTLE_FRAMES);
+    harness
+}
+
+#[test]
+fn the_brush_follows_its_strokes_until_the_switch_is_cleared() {
+    let mut harness = brush_harness("tool.paint");
+    assert!(harness.state().session.tool.flow_follow, "a flow brush follows the hand by default");
+    assert!(harness.query_by_label("Flow direction").is_none(), "the stroke gives the direction: no slider pretends to");
+    assert_eq!(field_text(&harness, "Flow speed"), "1.00");
+
+    // The speed still counts, and changing it leaves the brush following
+    type_value(&mut harness, "Flow speed", "0.5");
+    assert!(close(brush_flow(&harness), flow_from_polar(0.0, 0.5)), "{:?}", brush_flow(&harness));
+    assert!(harness.state().session.tool.flow_follow);
+
+    harness.get_by_label("Follow stroke").click();
+    harness.run_steps(SETTLE_FRAMES);
+
+    assert!(!harness.state().session.tool.flow_follow);
+    assert_eq!(field_text(&harness, "Flow direction"), "0", "a fixed direction can be set now");
+    type_value(&mut harness, "Flow direction", "90");
+    assert!(close(brush_flow(&harness), flow_from_polar(90.0, 0.5)), "{:?}", brush_flow(&harness));
+
+    // Following again hides the direction and keeps it for later
+    harness.get_by_label("Follow stroke").click();
+    harness.run_steps(SETTLE_FRAMES);
+    assert!(harness.state().session.tool.flow_follow);
+    assert!(harness.query_by_label("Flow direction").is_none());
+    assert!(close(brush_flow(&harness), flow_from_polar(90.0, 0.5)));
+}
+
+#[test]
+fn a_tool_that_does_not_stroke_shows_the_direction_it_paints() {
+    // A polygon fill paints the fixed direction whatever the switch says: it is not offered
+    let harness = brush_harness("tool.polygonFill");
+    assert!(harness.state().session.tool.flow_follow);
+    assert!(harness.query_by_label("Follow stroke").is_none());
+    assert_eq!((field_text(&harness, "Flow direction").as_str(), field_text(&harness, "Flow speed").as_str()), ("0", "1.00"));
+}
