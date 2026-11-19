@@ -377,8 +377,8 @@ fn record_recreated_uploads(recreated: &mut BTreeMap<usize, BTreeSet<DisplayKind
 /// Mask view resolution for a texture set without a composite cache
 const MASK_VIEW_FALLBACK_RESOLUTION: u32 = 1024;
 
-/// RGBA of the texel the other texture sets show in the mask view
-const MASK_VIEW_BLANK: [u8; 4] = [38, 38, 38, 255];
+/// RGBA of the texel the other texture sets show in the mask view (headless renders send it too)
+use texturecraft_render::mask_view::MASK_VIEW_BLANK;
 
 /// Paint callback for one view.
 pub struct ViewCallback {

@@ -70,13 +70,20 @@ impl Gpu {
             for (k, tx, ty, b) in bytes {
                 h.renderer.upload_tile(&h.device, &h.queue, ts, k, tx, ty, &b);
             }
-            // The aux texture behind the mesh-map and mask views (rebuilt every render).
+            // The aux texture behind the mesh-map, mask and flow views, rebuilt every render for
+            // every set. The renderer outlives a render: a set left out would keep showing what
+            // an earlier view put there (the app sends the same blank image to those sets)
             let res = texturecraft_render::aux_size(cache.size);
             let aux = match s.view {
                 ViewMode::MeshMap(m) => Some(texturecraft_render::mesh_maps::mesh_map_rgba(s.doc.baked.get(&ts), m, res, cache.size, &comp.block_scales)),
-                ViewMode::Mask(id) if s.doc.project.locate(id).is_some_and(|(t, _, _)| t == ts) => s.mask_view_rgba(id, res),
+                ViewMode::Mask(id) => {
+                    let own_mask = s.doc.project.locate(id).filter(|(t, _, _)| *t == ts).and_then(|_| s.mask_view_rgba(id, res));
+                    Some(own_mask.unwrap_or_else(|| texturecraft_render::mask_view::mask_view_blank_rgba(cache.size)))
+                }
                 ViewMode::Channel(Channel::Flow) => Some(texturecraft_render::flow_view::flow_view_rgba(comp, res)),
-                _ => None,
+
+                // No other view reads the aux texture
+                ViewMode::Material | ViewMode::Channel(_) | ViewMode::UvChecker => None,
             };
             if let Some(rgba) = aux {
                 h.renderer.upload_aux(&h.device, &h.queue, ts, res, &rgba);
