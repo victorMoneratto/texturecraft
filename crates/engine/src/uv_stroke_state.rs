@@ -11,4 +11,6 @@ pub(crate) struct UvStrokeState {
     pub carry: f32,
     /// Stamps so far: the next stamp's seed, so noise alphas don't repeat from sample to sample.
     pub stamps: u32,
+    /// The center of the last stamp (None before the first): the next one's travel starts there.
+    pub last_stamp: Option<Vec2>,
 }

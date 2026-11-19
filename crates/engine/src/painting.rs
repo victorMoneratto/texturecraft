@@ -471,7 +471,10 @@ impl Session {
             while distance <= length && batch.len() < batch_size {
                 let center = start + segment * (distance / length.max(f32::MIN_POSITIVE));
                 let seed = progress.stamps.wrapping_add((stamped + batch.len()) as u32);
-                batch.push(texturecraft_paint::UvStamp { center, radius, angle, flow: settings.flow, hardness: settings.hardness, seed, source: None });
+
+                // From the stamp before: a slow drag steps a texel sideways, then a texel up
+                let travel = progress.last_stamp.replace(center).map(|from| center - from).filter(|step| *step != Vec2::ZERO);
+                batch.push(texturecraft_paint::UvStamp { center, radius, angle, flow: settings.flow, hardness: settings.hardness, seed, source: None, travel });
                 distance += step;
             }
 

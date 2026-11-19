@@ -397,6 +397,7 @@ mod tests {
             depth: 1.0,
             seed: 0,
             source: Some(crate::StampSource { origin: Vec3::ZERO, to_source: Mat3::from_diagonal(Vec3::new(1.0, -1.0, 1.0)) }),
+            travel: None,
         };
         let mut canvas = StrokeCanvas::new(128, 128);
         let mapped = Vec3::new(0.0, -0.03, 0.0);
@@ -550,8 +551,19 @@ mod tests {
             angle_fade: (89.0, 90.0),
             shape: Shape { alpha: crate::BrushAlpha::Round, image: None, library: None, params: Default::default(), level: 0 },
         };
-        let stamp =
-            Stamp { center, normal: Vec3::Y, tangent: Vec3::X, bitangent: Vec3::Z, radius, flow: 1.0, hardness: 0.9, depth: 1.0, seed: 0, source: None };
+        let stamp = Stamp {
+            center,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            bitangent: Vec3::Z,
+            radius,
+            flow: 1.0,
+            hardness: 0.9,
+            depth: 1.0,
+            seed: 0,
+            source: None,
+            travel: None,
+        };
 
         rasterize(&mut canvas, &context, &[stamp]);
 
@@ -699,6 +711,7 @@ mod tests {
                     depth: 1.0,
                     seed: stamp_index,
                     source: None,
+                    travel: None,
                 }
             })
             .collect();
@@ -760,6 +773,7 @@ mod tests {
             depth: 1.0,
             seed: 0,
             source: None,
+            travel: None,
         };
 
         rasterize(&mut canvas, &context, &[stamp]);
@@ -793,6 +807,8 @@ pub struct UvStamp {
     /// The symmetry copy this dab belongs to (None: the stroke itself), so a smudge's copies each
     /// drag their own trail as in the 3D view
     pub source: Option<StampSource>,
+    /// The step of the stroke that led to this dab, in UV units (None: the stroke's first dab)
+    pub travel: Option<texturecraft_geom::glam::Vec2>,
 }
 
 /// Accumulate UV-space stamps into `canvas` (only texels covered by the texture set).

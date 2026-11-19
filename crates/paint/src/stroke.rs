@@ -7,6 +7,7 @@ use texturecraft_texel::noise::pcg3d;
 
 use crate::brush::{Alignment, BrushSettings};
 use crate::stamp_source::StampSource;
+use crate::travel::Travel;
 
 /// Scene access for picking.
 pub struct PickCtx<'a> {
@@ -67,6 +68,9 @@ pub struct Stamp {
     pub seed: u32,
     /// A symmetry copy's way back to its source: it paints where the source would, mirrored
     pub source: Option<StampSource>,
+    /// Where the dab was heading: None for the first dab of a stroke, for the first one after the
+    /// pointer came back onto the mesh, and for particle dabs
+    pub travel: Option<Travel>,
 }
 
 /// An in-progress stroke.
@@ -83,6 +87,8 @@ pub struct Stroke {
     last_dir: Option<Vec3>,
     /// Every stamp emitted so far (for replay, inspect and tests).
     pub stamps: Vec<Stamp>,
+    /// Where the last stamp went on the surface, before jitter: the next one's travel starts there
+    last_stamp: Option<Vec3>,
 }
 
 fn rand01(n: u32, k: u32) -> f32 {
@@ -94,7 +100,18 @@ impl Stroke {
         let s = settings.sanitized();
         let (lo, hi) = mesh.bounds();
         let diag = (hi - lo).length().max(1e-4);
-        Stroke { radius: s.size * diag, settings: s, center: (lo + hi) * 0.5, last: None, dist: 0.0, lazy: None, count: 0, last_dir: None, stamps: Vec::new() }
+        Stroke {
+            radius: s.size * diag,
+            settings: s,
+            center: (lo + hi) * 0.5,
+            last: None,
+            dist: 0.0,
+            lazy: None,
+            count: 0,
+            last_dir: None,
+            stamps: Vec::new(),
+            last_stamp: None,
+        }
     }
 
     /// Feed a pointer position (pixels) with pen pressure (1 for a mouse). Returns new stamps.
@@ -141,6 +158,7 @@ impl Stroke {
         let Some(last) = self.last else {
             out.push(self.stamp(ctx, &hit, radius));
             self.last = Some(hit);
+            self.last_stamp = Some(hit.pos);
             self.dist = 0.0;
             return;
         };
@@ -174,7 +192,13 @@ impl Stroke {
                 .and_then(|s| pick(ctx, s))
                 .filter(|h| h.pos.distance(p) < radius * 2.0);
             let h = snapped.unwrap_or(SurfaceHit { pos: p, ..hit });
-            out.push(self.stamp(ctx, &h, radius));
+
+            // Travel runs from the stamp before, not along the pointer's last step: a slow drag
+            // arrives a pixel at a time, sideways then up, and its dabs would head either way
+            let direction = self.last_stamp.and_then(|from| (h.pos - from).try_normalize()).unwrap_or(seg / len);
+            self.last_stamp = Some(h.pos);
+            let travel = Some(Travel { direction, normal: h.nrm });
+            out.push(Stamp { travel, ..self.stamp(ctx, &h, radius) });
             emitted += 1;
             t += step;
         }
@@ -223,6 +247,7 @@ impl Stroke {
             depth: settings.depth,
             seed,
             source: None,
+            travel: None,
         }
     }
 
@@ -241,7 +266,8 @@ impl Stroke {
             let tangent = stamp.tangent * sign;
             let map = Mat3::from_diagonal(sign);
             let source = Some(StampSource { origin, to_source: map.transpose() });
-            copies.push(Stamp { center: origin + (stamp.center - origin) * sign, normal, tangent, bitangent: normal.cross(tangent), source, ..*stamp });
+            let travel = stamp.travel.map(|travel| travel.mapped(map));
+            copies.push(Stamp { center: origin + (stamp.center - origin) * sign, normal, tangent, bitangent: normal.cross(tangent), source, travel, ..*stamp });
             maps.push(map);
         }
 
@@ -257,6 +283,7 @@ impl Stroke {
                     tangent: turn * base.tangent,
                     bitangent: turn * base.bitangent,
                     source: Some(StampSource { origin, to_source: (Mat3::from_quat(turn) * *map).transpose() }),
+                    travel: base.travel.map(|travel| travel.mapped(Mat3::from_quat(turn))),
                     ..*base
                 }));
             }
@@ -412,5 +439,100 @@ mod tests {
         st.symmetry = crate::brush::Symmetry { radial: 200, axis: 9, ..st.symmetry };
         let clean = st.sanitized().symmetry;
         assert_eq!((clean.radial, clean.axis), (32, 2));
+    }
+
+    #[test]
+    fn the_first_dab_has_no_travel_and_the_next_ones_head_where_the_pointer_went() {
+        let (mesh, bvh, camera) = ctx_parts();
+        let ctx = PickCtx { mesh: &mesh, bvh: &bvh, camera: &camera, viewport: Vec2::new(400.0, 400.0) };
+        let mut stroke = Stroke::new(&BrushSettings::default(), &mesh);
+
+        let first = stroke.add(&ctx, Vec2::new(180.0, 200.0), 1.0);
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].travel, None, "a dab alone was not heading anywhere");
+
+        // To the right on the screen is +X seen from the front
+        let next = stroke.add(&ctx, Vec2::new(220.0, 200.0), 1.0);
+        assert!(next.len() > 1);
+        for stamp in &next {
+            let travel = stamp.travel.expect("a dab along the stroke knows its travel");
+            assert!(travel.direction.x > 0.95 && (travel.direction.length() - 1.0).abs() < 1e-5, "{travel:?}");
+            assert!(travel.normal.dot(stamp.center.normalize()) > 0.99, "measured on the surface under the dab");
+        }
+    }
+
+    #[test]
+    fn a_slow_drag_of_pixel_steps_travels_along_the_drag() {
+        let (mesh, bvh, camera) = ctx_parts();
+        let ctx = PickCtx { mesh: &mesh, bvh: &bvh, camera: &camera, viewport: Vec2::new(400.0, 400.0) };
+        let mut stroke = Stroke::new(&BrushSettings { size: 0.08, ..BrushSettings::default() }, &mesh);
+
+        // A mouse dragged slowly up and to the right: one pixel right, one pixel up, and so on
+        let mut pointer = Vec2::new(170.0, 230.0);
+        let mut stamps = stroke.add(&ctx, pointer, 1.0);
+        for step in 0..60 {
+            pointer += if step % 2 == 0 { Vec2::X } else { Vec2::NEG_Y };
+            stamps.extend(stroke.add(&ctx, pointer, 1.0));
+        }
+        assert!(stamps.len() > 8, "{}", stamps.len());
+
+        // No dab heads the way of the one pixel step that happened to bring it
+        let drag = (stamps[stamps.len() - 1].center - stamps[0].center).normalize();
+        let within_30_degrees = 30.0f32.to_radians().cos();
+        for stamp in &stamps[1..] {
+            let travel = stamp.travel.unwrap();
+            assert!(travel.direction.dot(drag) > within_30_degrees, "{:?} against the drag {drag}", travel.direction);
+        }
+
+        // And together they head along the drag
+        let mean = stamps[1..].iter().map(|stamp| stamp.travel.unwrap().direction).sum::<Vec3>().normalize();
+        assert!(mean.dot(drag) > 3.0f32.to_radians().cos(), "{mean} against the drag {drag}");
+    }
+
+    #[test]
+    fn coming_back_onto_the_mesh_starts_without_the_travel_it_left_with() {
+        let (mesh, bvh, camera) = ctx_parts();
+        let ctx = PickCtx { mesh: &mesh, bvh: &bvh, camera: &camera, viewport: Vec2::new(400.0, 400.0) };
+        let mut stroke = Stroke::new(&BrushSettings::default(), &mesh);
+        stroke.add(&ctx, Vec2::new(180.0, 200.0), 1.0);
+        assert!(stroke.add(&ctx, Vec2::new(220.0, 200.0), 1.0).iter().all(|stamp| stamp.travel.is_some()));
+
+        // Off the mesh, then back on it somewhere else
+        assert!(stroke.add(&ctx, Vec2::new(2.0, 2.0), 1.0).is_empty());
+        let back = stroke.add(&ctx, Vec2::new(200.0, 230.0), 1.0);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].travel, None, "the pointer did not travel over the mesh to get here");
+
+        // Up the screen from there is +Y, not the +X the stroke left with
+        let up = stroke.add(&ctx, Vec2::new(200.0, 190.0), 1.0);
+        assert!(!up.is_empty());
+        assert!(up.iter().all(|stamp| stamp.travel.is_some_and(|travel| travel.direction.y > 0.9 && travel.direction.x.abs() < 0.1)));
+    }
+
+    #[test]
+    fn symmetry_copies_travel_the_mirrored_and_the_turned_way() {
+        let (mesh, bvh, camera) = ctx_parts();
+        let ctx = PickCtx { mesh: &mesh, bvh: &bvh, camera: &camera, viewport: Vec2::new(400.0, 400.0) };
+        let mut settings = BrushSettings::default();
+        settings.symmetry.x = true;
+        let mut stroke = Stroke::new(&settings, &mesh);
+        stroke.add(&ctx, Vec2::new(230.0, 200.0), 1.0);
+        let stamps = stroke.add(&ctx, Vec2::new(260.0, 180.0), 1.0);
+        let (source, copy) = (stamps[0].travel.unwrap(), stamps[1].travel.unwrap());
+        assert_eq!(copy.direction, source.direction * Vec3::new(-1.0, 1.0, 1.0));
+        assert_eq!(copy.normal, source.normal * Vec3::new(-1.0, 1.0, 1.0));
+
+        // A quarter turn about Y for each of four copies
+        settings.symmetry = crate::brush::Symmetry { x: false, radial: 4, axis: 1, ..settings.symmetry };
+        let mut stroke = Stroke::new(&settings, &mesh);
+        stroke.add(&ctx, Vec2::new(230.0, 200.0), 1.0);
+        let stamps = stroke.add(&ctx, Vec2::new(260.0, 180.0), 1.0);
+        let source = stamps[0].travel.unwrap();
+        for (copy, stamp) in stamps.iter().take(4).enumerate() {
+            let turn = Quat::from_axis_angle(Vec3::Y, copy as f32 * std::f32::consts::FRAC_PI_2);
+            let travel = stamp.travel.unwrap();
+            assert!((travel.direction - turn * source.direction).length() < 1e-5, "copy {copy}: {travel:?}");
+            assert!((travel.normal - turn * source.normal).length() < 1e-5, "copy {copy}: {travel:?}");
+        }
     }
 }

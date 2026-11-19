@@ -45,7 +45,13 @@ impl<'a> UvMirror<'a> {
             // Keep the dab's orientation as the 3D view does: its direction is mapped, its shape is not mirrored
             let angle = turn_towards(&landing, *map * x_axis).map_or(stamp.angle, f32::to_degrees);
             let source = Some(StampSource { origin: self.origin, to_source: map.transpose() });
-            out.push(UvStamp { center: surface.uv, angle, source, ..*stamp });
+
+            // The dab's travel takes the same way: onto the surface, through the map, back into the landing's chart
+            let travel = stamp.travel.and_then(|travel| {
+                let on_surface = frame.along_u * travel.x + frame.along_v * travel.y;
+                texturecraft_geom::uv_direction(landing.along_u, landing.along_v, *map * on_surface)
+            });
+            out.push(UvStamp { center: surface.uv, angle, source, travel, ..*stamp });
         }
     }
 
@@ -116,7 +122,7 @@ mod tests {
         let mirror = UvMirror::new(&symmetry, Vec3::ZERO, &mesh, &bvh, &gbuf, 0).unwrap();
 
         // The dab at world (0.5, 0) points 30 degrees up from +X
-        let stamp = UvStamp { center: Vec2::new(0.75, 0.5), radius: 0.05, angle: 30.0, flow: 1.0, hardness: 1.0, seed: 0, source: None };
+        let stamp = UvStamp { center: Vec2::new(0.75, 0.5), radius: 0.05, angle: 30.0, flow: 1.0, hardness: 1.0, seed: 0, source: None, travel: Some(Vec2::X) };
         let mut copies = Vec::new();
         mirror.add_copies(&stamp, &mut copies);
 
@@ -125,6 +131,10 @@ mod tests {
         // A quarter turn about +Z puts the copy at world (0, 0.5), pointing 120 degrees from +X
         let quarter = copies.iter().find(|copy| (copy.center - Vec2::new(0.5, 0.25)).length() < 0.01).unwrap();
         assert!((quarter.angle - 120.0).abs() < 0.1, "angle {}", quarter.angle);
+
+        // The dab was heading along +U, world +X; its quarter-turn copy heads along world +Y, which is -V
+        let travel = quarter.travel.unwrap().normalize();
+        assert!((travel - Vec2::NEG_Y).length() < 1e-4, "travel {travel}");
 
         // Each copy is told apart from the stroke and the other copies (a smudge gives each its own trail)
         let sources: Vec<_> = copies.iter().map(|copy| copy.source).collect();

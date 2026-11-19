@@ -23,6 +23,7 @@ pub mod raster;
 pub mod stamp_source;
 pub mod stroke;
 pub mod text;
+pub mod travel;
 pub mod visibility;
 
 pub use alpha_params::AlphaParams;
@@ -33,4 +34,5 @@ pub use pickup::{Pickup, PickupMode};
 pub use raster::{RasterCtx, StrokeCanvas, UvStamp, fill_coverage, fill_triangles, rasterize, rasterize_uv};
 pub use stamp_source::StampSource;
 pub use stroke::{PickCtx, Stamp, Stroke, SurfaceHit, pick};
+pub use travel::Travel;
 pub use visibility::{EyeDepth, screen_point};

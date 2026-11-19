@@ -45,6 +45,9 @@ pub fn emit(ctx: &PickCtx, p: &Particles, s: &Stamp) -> Vec<Stamp> {
                 radius: size,
                 flow: s.flow * (1.0 - life as f32 / p.lifetime as f32),
                 seed: s.seed.wrapping_mul(17).wrapping_add(k),
+
+                // A particle slides its own way, not the stroke's
+                travel: None,
                 ..*s
             });
             if step <= 0.0 {
@@ -98,6 +101,7 @@ mod tests {
             depth: 1.0,
             seed: 3,
             source: None,
+            travel: None,
         };
         let particles = Particles { enabled: true, count: 4, lifetime: 20, gravity: 1.0 };
 
@@ -108,5 +112,11 @@ mod tests {
         let lowest = dabs.iter().map(|d| d.center.y).fold(f32::MAX, f32::min);
         assert!(lowest < -0.4, "{lowest}");
         assert!(dabs.iter().all(|d| d.center.z.abs() < 1e-3));
+
+        // The stroke was heading sideways; the particles it shed slide down and claim no travel
+        let heading = Stamp { travel: Some(crate::Travel { direction: Vec3::X, normal: Vec3::Z }), ..stamp };
+        let shed = emit(&context, &particles, &heading);
+        assert_eq!(shed.len(), 80);
+        assert!(shed.iter().all(|dab| dab.travel.is_none()));
     }
 }
