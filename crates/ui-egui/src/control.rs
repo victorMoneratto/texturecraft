@@ -211,6 +211,10 @@ pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, para
             ok(Value::Null)
         }
         "ui.set" => {
+            // The saved form gives the released build a channel it has where this build shows the
+            // flow map: what only this build holds is put back unless the patch names its field
+            let fork_only = crate::fork_only_ui::ForkOnlyUi::of(&app.ui);
+            let names_layer_channel = params.as_object().is_some_and(|patch| patch.contains_key("layer_channel"));
             let mut current_state = serde_json::to_value(&app.ui).unwrap_or(Value::Null);
             if let (Some(object), Some(patch)) = (current_state.as_object_mut(), params.as_object()) {
                 for (key, value) in patch {
@@ -219,7 +223,10 @@ pub fn handle(app: &mut TextureCraftApp, ctx: &egui::Context, method: &str, para
             }
 
             match serde_json::from_value(current_state) {
-                Ok(ui) => {
+                Ok(mut ui) => {
+                    if !names_layer_channel {
+                        fork_only.restore(&mut ui);
+                    }
                     app.ui = ui;
                     app.ui.prefs.apply_resource_limits();
                     ok(Value::Null)

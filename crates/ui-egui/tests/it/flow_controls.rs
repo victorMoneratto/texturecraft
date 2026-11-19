@@ -115,3 +115,24 @@ fn the_levels_channel_picker_leaves_out_the_flow_map() {
     assert_eq!(after[1], before[1], "levels pass the flow map through: it is not offered");
     assert_eq!(after[2], before[2], "as the normal map is not");
 }
+
+#[test]
+fn a_ui_state_change_by_command_keeps_the_flow_map_displayed() {
+    let (session, _) = flow_session();
+    let mut harness = harness(session, Channel::BaseColor);
+    let context = egui::Context::default();
+    let mut set = |harness: &mut Harness<'_, TextureCraftApp>, patch: serde_json::Value| {
+        let reply = texturecraft_ui_egui::control::handle(harness.state_mut(), &context, "ui.set", &patch);
+        assert_eq!(reply["ok"], true, "{reply}");
+    };
+
+    set(&mut harness, json!({"layer_channel": "Flow"}));
+    assert_eq!(harness.state().ui.layer_channel, Channel::Flow);
+
+    // The state is rebuilt from its saved form, where base colour stands in for the flow map
+    set(&mut harness, json!({"props_tab": "Material"}));
+    assert_eq!(harness.state().ui.layer_channel, Channel::Flow, "a change of something else leaves the displayed channel");
+
+    set(&mut harness, json!({"layer_channel": "Roughness"}));
+    assert_eq!(harness.state().ui.layer_channel, Channel::Roughness, "naming another channel still changes it");
+}
