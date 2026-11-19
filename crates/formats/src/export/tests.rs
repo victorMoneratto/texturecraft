@@ -950,3 +950,25 @@ fn a_float_file_holds_the_flow_as_stored() {
     let texel = image.get_pixel(11, 11).0;
     assert!((texel[0] - 0.625).abs() < 1e-4 && (texel[1] - 0.25).abs() < 1e-4 && texel[2] == 0.0, "{texel:?}");
 }
+
+#[test]
+fn an_8_bit_flow_file_holds_the_levels_the_raw_view_shows() {
+    let mut fx = flow_fx(0.0, 0.0);
+
+    // Every stored level, one fixture image at a time: red rises while green falls
+    let texels_per_image = RES * RES;
+    for first_level in (0..=u32::from(u16::MAX)).step_by(texels_per_image as usize) {
+        let level = |x: u32, y: u32| (first_level + y * RES + x).min(u32::from(u16::MAX)) as u16;
+        let flow = fx.comp.channels.get_mut(&Channel::Flow).unwrap();
+        for (x, y) in (0..RES).flat_map(|y| (0..RES).map(move |x| (x, y))) {
+            flow.set(x, y, &[level(x, y), u16::MAX - level(x, y), 0]);
+        }
+
+        let image = decode(&fx.render(&flow_options(8, false))[0]).to_rgb8();
+
+        for (x, y) in (0..RES).flat_map(|y| (0..RES).map(move |x| (x, y))) {
+            let shown = [texturecraft_compose::flow_view_byte(level(x, y)), texturecraft_compose::flow_view_byte(u16::MAX - level(x, y)), 0];
+            assert_eq!(image.get_pixel(x, y).0, shown, "stored level {}", level(x, y));
+        }
+    }
+}

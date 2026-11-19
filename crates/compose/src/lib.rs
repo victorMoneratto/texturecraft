@@ -14,6 +14,7 @@ pub mod curvature_sizes;
 pub mod display;
 pub mod eval;
 mod fabric;
+pub mod flow_view;
 mod fur_lock;
 mod held_fields;
 mod image_identity;
@@ -33,6 +34,7 @@ pub use eval::{
     BLOCK, Composite, Inputs, MASK_CHANNEL, PaintTarget, Stencil, StrokePreview, all_tiles, composite_tiles, composite_tiles_cached, covered_tiles,
     effect_histogram, flatten_layer, mask_at, mask_image, mask_texels, mask_values, pad_tiles, stack_reads_neighbours,
 };
+pub use flow_view::{FLOW_VIEW_STILL, flow_view_byte, flow_view_texel};
 pub use pattern_context::PatternContext;
 pub use solo::solo_project;
 pub use store::{BakedMaps, ImageRes, ImageStore, PixelStore};
