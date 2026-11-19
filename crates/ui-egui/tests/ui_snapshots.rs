@@ -119,6 +119,7 @@ fn brush_presets_popover_snapshot() {
         name: "Snapshot brush".into(),
         brush,
         channels: None,
+        flow_follow: None,
         file: None,
     });
     assert_eq!(harness.state().session.brush_presets.list.len(), 1);

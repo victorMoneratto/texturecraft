@@ -28,6 +28,20 @@ pub fn follows_stroke(tool: &ToolState) -> bool {
     tool.flow_follow && can_follow_stroke(tool)
 }
 
+/// Whether the tool's paint reaches a flow map: the channel is on in the brush's material, the
+/// active texture set has it and so does the layer that would be painted. Flow settings are
+/// stored with a path or a brush only then, so files that do not use the flow map never name it.
+pub(crate) fn paints_flow(session: &Session) -> bool {
+    let project = &session.doc.project;
+    let on_set = project.texture_set(session.ts()).is_ok_and(|set| set.has_channel(Channel::Flow));
+    let on_layer = session.selected_layer().is_some_and(|selected| {
+        let owner = project.effect(selected).map_or(selected, |(owner, _)| owner);
+        let painted = project.content_layer(owner).map_or(owner, |layer| layer.id);
+        project.layer(painted).is_ok_and(|layer| layer.channels.contains_key(&Channel::Flow))
+    });
+    session.tool.enabled.contains(&Channel::Flow) && on_set && on_layer
+}
+
 /// The flow map's own producer for a stroke that starts now on `target` painting `values`
 /// (the stroke's channels) at `size` texels with dabs `spacing` diameters apart. None when the
 /// stroke paints the flow map like any other channel, or not at all.

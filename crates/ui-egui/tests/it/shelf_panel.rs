@@ -149,7 +149,7 @@ fn reset_query_shows_every_asset_again() {
 #[test]
 fn refresh_reads_the_saved_brushes_again() {
     let mut harness = shelf(REFERENCE_WINDOW);
-    let stale = UserBrush { name: "Stale brush marker".into(), brush: Default::default(), channels: None, file: None };
+    let stale = UserBrush { name: "Stale brush marker".into(), brush: Default::default(), channels: None, flow_follow: None, file: None };
     harness.state_mut().session.brush_presets.list.push(stale);
     harness.run_steps(1);
 
@@ -271,7 +271,13 @@ fn a_saved_brush_is_a_tile_that_loads_the_preset() {
     let mut harness = shelf(REFERENCE_WINDOW);
     let mut saved = harness.state().session.tool.brush.clone();
     saved.spacing += SAVED_SPACING_CHANGE;
-    harness.state_mut().session.brush_presets.list.push(UserBrush { name: "Session brush".into(), brush: saved.clone(), channels: None, file: None });
+    harness.state_mut().session.brush_presets.list.push(UserBrush {
+        name: "Session brush".into(),
+        brush: saved.clone(),
+        channels: None,
+        flow_follow: None,
+        file: None,
+    });
     harness.state_mut().ui.shelf_tab = BRUSHES_TYPE;
     harness.run_steps(3);
 
@@ -284,7 +290,13 @@ fn a_saved_brush_is_a_tile_that_loads_the_preset() {
 #[test]
 fn brush_management_follows_the_shelf_type_folder_and_search() {
     let mut harness = shelf(REFERENCE_WINDOW);
-    harness.state_mut().session.brush_presets.list.push(UserBrush { name: "Session brush".into(), brush: Default::default(), channels: None, file: None });
+    harness.state_mut().session.brush_presets.list.push(UserBrush {
+        name: "Session brush".into(),
+        brush: Default::default(),
+        channels: None,
+        flow_follow: None,
+        file: None,
+    });
     harness.state_mut().ui.shelf_tab = BRUSHES_TYPE;
     harness.run_steps(3);
 

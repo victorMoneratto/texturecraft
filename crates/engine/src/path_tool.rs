@@ -172,6 +172,19 @@ struct PathPaint {
     enabled: BTreeSet<Channel>,
     mask_value: f32,
     camera: OrbitCamera,
+    /// Whether the path paints the direction it runs in into the flow map. Stored only by a path
+    /// that paints the flow map, so every other path stays readable without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    flow_follow: Option<bool>,
+}
+
+impl PathPaint {
+    /// Whether this path's strokes follow their direction, for a tool that does when `current`:
+    /// as stored; a path that paints the flow map and says nothing was stored before strokes
+    /// could follow, and paints its fixed direction; any other path leaves the tool as it is.
+    fn follows(&self, current: bool) -> bool {
+        self.flow_follow.unwrap_or(current && !self.enabled.contains(&Channel::Flow))
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -333,6 +346,7 @@ fn edit_path(s: &mut Session, p: &Value) -> Result<Value> {
 
     s.finish_path()?;
     set_tool(s, Tool::Path)?;
+    s.tool.flow_follow = paint.follows(s.tool.flow_follow);
     s.tool.brush = paint.brush;
 
     // Merged, not replaced: a stored path may leave out channels it does not paint
@@ -465,7 +479,8 @@ impl Session {
         // A build without the flow map cannot read a path that names it, so a path that does not
         // paint it must not mention it: the tool holds a value for every channel
         let values = t.values.iter().filter(|(c, _)| **c != Channel::Flow || t.enabled.contains(c)).map(|(c, v)| (*c, *v)).collect();
-        let paint = PathPaint { brush: t.brush.clone(), values, enabled: t.enabled.clone(), mask_value: t.mask_value, camera };
+        let flow_follow = crate::flow_stroke::paints_flow(self).then_some(t.flow_follow);
+        let paint = PathPaint { brush: t.brush.clone(), values, enabled: t.enabled.clone(), mask_value: t.mask_value, camera, flow_follow };
         PathShape {
             points: path.points.iter().map(|p| p.to_array()).collect(),
             corners: path.corner_flags(),
@@ -1010,6 +1025,7 @@ impl Session {
     fn paint_shape(&mut self, shape: &PathShape) -> Result<Value> {
         let paint = read_paint(shape)?;
         let (camera, viewport) = paint_view(shape, &paint);
+        self.tool.flow_follow = paint.follows(self.tool.flow_follow);
         self.tool.brush = paint.brush;
         self.tool.values.extend(paint.values);
         self.tool.enabled = paint.enabled;

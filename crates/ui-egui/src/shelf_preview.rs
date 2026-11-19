@@ -151,7 +151,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("tc-named-preview-{}.tcbrush", std::process::id()));
         let mut brush = BrushSettings::default();
         brush.size = 0.07;
-        let preset = UserBrush { name: "Ink".into(), brush: brush.clone(), channels: None, file: None };
+        let preset = UserBrush { name: "Ink".into(), brush: brush.clone(), channels: None, flow_follow: None, file: None };
         std::fs::write(&path, serde_json::to_vec(&preset).unwrap()).unwrap();
 
         let loaded = read_saved_brush(&path).unwrap();

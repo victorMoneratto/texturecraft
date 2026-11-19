@@ -83,7 +83,13 @@ impl Session {
 
             let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("brush");
             let parsed = serde_json::from_slice::<UserBrush>(&bytes).or_else(|_| {
-                serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush { name: stem.to_string(), brush, channels: None, file: None })
+                serde_json::from_slice::<BrushSettings>(&bytes).map(|brush| UserBrush {
+                    name: stem.to_string(),
+                    brush,
+                    channels: None,
+                    flow_follow: None,
+                    file: None,
+                })
             });
             match parsed {
                 Ok(mut preset) => {
@@ -175,6 +181,9 @@ fn apply(session: &mut Session, params: &Value) -> Result<Value> {
     if let Some(channels) = user_preset.channels {
         session.tool.enabled = channels;
     }
+    if let Some(follow) = user_preset.flow_follow {
+        session.tool.flow_follow = follow;
+    }
 
     set(session, brush)
 }
@@ -213,7 +222,9 @@ fn store(session: &mut Session, params: &Value) -> Result<Value> {
     let existing = existing_index.and_then(|index| library.list.get(index));
     let name = existing.map_or(name, |preset| preset.name.clone());
     let old_file = existing.and_then(|preset| preset.file.clone());
-    let mut stored_preset = UserBrush { name: name.clone(), brush: session.tool.brush.sanitized(), channels: Some(session.tool.enabled.clone()), file: None };
+    let flow_follow = crate::flow_stroke::paints_flow(session).then_some(session.tool.flow_follow);
+    let mut stored_preset =
+        UserBrush { name: name.clone(), brush: session.tool.brush.sanitized(), channels: Some(session.tool.enabled.clone()), flow_follow, file: None };
     stored_preset.file = library.write(&stored_preset, old_file.as_deref()).map_err(|error| bad(CMD, error))?;
 
     match existing_index.and_then(|index| session.brush_presets.list.get_mut(index)) {
@@ -521,7 +532,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let original = UserBrush { name: "Ink".into(), brush: BrushSettings::default(), channels: None, file: None };
+        let original = UserBrush { name: "Ink".into(), brush: BrushSettings::default(), channels: None, flow_follow: None, file: None };
         let original_bytes = serde_json::to_vec(&original).unwrap();
         let path = dir.join("Pencil.tcbrush");
         std::fs::write(&path, &original_bytes).unwrap();
@@ -553,7 +564,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        let preset = UserBrush { name: "bad\nname".into(), brush: BrushSettings::default(), channels: None, file: None };
+        let preset = UserBrush { name: "bad\nname".into(), brush: BrushSettings::default(), channels: None, flow_follow: None, file: None };
         std::fs::write(dir.join("bad.tcbrush"), serde_json::to_vec(&preset).unwrap()).unwrap();
         let mut session = session();
         let warnings = session.load_brush_presets(dir.clone());
