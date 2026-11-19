@@ -13,11 +13,13 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod aux_region;
 pub mod bake_overlay;
 pub mod bake_visualization;
 pub mod cage_geometry;
 mod cage_gpu;
 pub mod displace;
+pub mod flow_view;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod gpu_bake;
 pub mod gpu_trace;
@@ -36,6 +38,7 @@ pub mod set_highlight;
 mod subdivide;
 pub mod trace;
 
+pub use aux_region::AuxRegion;
 pub use bake_overlay::BakeOverlay;
 pub use bake_visualization::BakeVisualization;
 pub use cage_geometry::CageGeometry;
