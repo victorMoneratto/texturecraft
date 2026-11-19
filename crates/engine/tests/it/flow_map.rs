@@ -121,9 +121,12 @@ fn one_of_direction_and_speed_keeps_the_other() {
 fn a_direct_value_keeps_the_third_component_empty() {
     let mut session = flow_session();
 
-    execute(&mut session, "tool.material", &json!({"channel": "flow", "value": [0.9, 0.1, 0.7]})).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "value": [0.8, 0.3, 0.7]})).unwrap();
 
-    assert_eq!(session.tool.values[&Channel::Flow], [0.9, 0.1, 0.0]);
+    // The vector is kept on the levels it is stored as: within a level of what was given
+    let stored = session.tool.values[&Channel::Flow];
+    assert!(close(stored, [0.8, 0.3, 0.0]), "{stored:?}");
+    assert_eq!(stored[2], 0.0);
 }
 
 #[test]
@@ -150,10 +153,13 @@ fn hostile_directions_paint_still_water_or_are_refused() {
 
     // Numbers JSON cannot carry (NaN, infinity) arrive as null and count as absent
     let untouched = session.tool.values[&Channel::Flow];
-    for params in
-        [json!({"channel": "flow", "angle": null, "speed": null}), json!({"channel": "flow", "angle": "east"}), json!({"channel": "flow", "angle": [1, 2]})]
-    {
-        execute(&mut session, "tool.material", &params).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": null, "speed": null})).unwrap();
+    assert_eq!(session.tool.values[&Channel::Flow], untouched);
+
+    // A direction that is there but is not a number is refused, not skipped
+    for params in [json!({"channel": "flow", "angle": "east"}), json!({"channel": "flow", "angle": [1, 2], "speed": 0.5})] {
+        let error = execute(&mut session, "tool.material", &params).unwrap_err().to_string();
+        assert!(error.contains("`angle`"), "{params}: {error}");
         assert_eq!(session.tool.values[&Channel::Flow], untouched, "{params}");
     }
 

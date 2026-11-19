@@ -20,6 +20,7 @@ pub mod file_cmds;
 pub mod fill_hit_test;
 pub mod fill_mode;
 pub mod filter_lib;
+pub mod flow_direction;
 mod flow_params;
 pub mod flow_stroke;
 mod frame_target;

@@ -260,6 +260,10 @@ pub struct ToolState {
     /// direction in `values`, whose length stays the painted speed either way.
     #[serde(default = "default_flow_follow")]
     pub flow_follow: bool,
+    /// Flow map: the fixed direction in degrees as it was given, beside the packed vector in
+    /// `values`, which has no direction at speed 0 (read it with `flow_direction::tool_direction`).
+    #[serde(default)]
+    pub flow_angle: f32,
 }
 
 fn default_flow_follow() -> bool {
@@ -318,6 +322,7 @@ impl Default for ToolState {
             clone_from: CloneFrom::Composite,
             path: Default::default(),
             flow_follow: default_flow_follow(),
+            flow_angle: 0.0,
         };
         t.values.insert(Channel::BaseColor, [0.8, 0.8, 0.8]);
         t.values.insert(Channel::Roughness, [0.3; 3]);

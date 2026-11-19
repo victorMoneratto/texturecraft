@@ -96,7 +96,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set fill source",
             [],
             None,
-            "{layer? | effect?: content fill effect id, channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other)|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?, resolution?: auto|textureSet|uvTile|custom, customResolution?, resolutionFactor?: -3..3, tile?: {Tile Generator settings in camelCase, as project.inspect shows them}, tileDefaults?: true (alone, they edit the channel's pattern)|image?, normalFormat?: openGl|directX (the image's normal map convention; alone, it changes the channel's image)|anchor?: anchor effect id, anchorChannel?, colors?: gradient map of a color channel's procedural or anchor, 1 to 16 colors dark to light ([r, g, b] linear or \"#rrggbb\" sRGB; [] removes it; absent keeps it; alone, it changes the channel's source)|gradientMap?: true (turns the color stops on from the channel's current procedural or anchor: a procedural's low, their midpoint and high; an anchor's black, gray and white; stops already there stay), enabled?, solo?: true (this channel on, every other one off)}",
+            "{layer? | effect?: content fill effect id, channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other, except that a still fill keeps no direction and needs both; a flow `value` is the packed vector and may not be longer than speed 1)|procedural?: kind, scale?, seed?, contrast?, balance?, invert?, low?, high?, resolution?: auto|textureSet|uvTile|custom, customResolution?, resolutionFactor?: -3..3, tile?: {Tile Generator settings in camelCase, as project.inspect shows them}, tileDefaults?: true (alone, they edit the channel's pattern)|image?, normalFormat?: openGl|directX (the image's normal map convention; alone, it changes the channel's image)|anchor?: anchor effect id, anchorChannel?, colors?: gradient map of a color channel's procedural or anchor, 1 to 16 colors dark to light ([r, g, b] linear or \"#rrggbb\" sRGB; [] removes it; absent keeps it; alone, it changes the channel's source)|gradientMap?: true (turns the color stops on from the channel's current procedural or anchor: a procedural's low, their midpoint and high; an anchor's black, gray and white; stops already there stay), enabled?, solo?: true (this channel on, every other one off)}",
             has_layer,
             fill_set
         ),
@@ -614,7 +614,8 @@ fn fill_source_from(
     const CMD: &str = "layer.fill.set";
     let low = color_param(CMD, params, "low")?.unwrap_or([0.0; 3]);
     let high = color_param(CMD, params, "high")?.unwrap_or([1.0; 3]);
-    let uniform = color_param(CMD, params, "color")?.or(color_param(CMD, params, "value")?);
+    let (color, value) = (color_param(CMD, params, "color")?, color_param(CMD, params, "value")?);
+    let uniform = color.map(|color| ("color", color)).or(value.map(|value| ("value", value)));
 
     if let Some(name) = strp(params, "procedural") {
         let kind = ProceduralKind::parse(name).ok_or_else(|| bad(CMD, format!("unknown procedural `{name}`")))?;
@@ -639,12 +640,12 @@ fn fill_source_from(
         Some(Source::Uniform(value)) => *value,
         _ => channel.default_value(),
     };
-    if let Some(flow) = crate::flow_params::flow_value_param(CMD, params, channel, current)? {
+    if let Some(flow) = crate::flow_params::fill_flow_param(CMD, params, channel, current)? {
         return Ok(Some(Source::Uniform(flow)));
     }
 
-    if let Some(color) = uniform {
-        return Ok(Some(Source::Uniform(crate::flow_params::uniform_for(channel, color))));
+    if let Some((key, color)) = uniform {
+        return Ok(Some(Source::Uniform(crate::flow_params::uniform_for(CMD, key, channel, color)?)));
     }
 
     if let Some(name) = strp(params, "image") {

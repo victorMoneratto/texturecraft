@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Tool material",
             [],
             None,
-            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's fixed direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other), follow?: bool (flow channel: strokes paint the direction they travel at that speed, the default; false paints the fixed direction, and so does giving an angle or a value without follow), enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply)",
+            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's fixed direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other: the direction is remembered at speed 0 and an angle given there keeps speed 0; a flow `value` is the packed vector [x, y, 0], each component stored as (32768 + 32767 × it) / 65535, and may not be longer than speed 1), follow?: bool (flow channel: strokes paint the direction they travel at that speed, the default; false paints the fixed direction, and so does giving an angle or a value without follow), enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply). A parameter that is given but malformed is refused, and a refused request changes nothing",
             always,
             material
         ),
@@ -109,7 +109,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             click
         ),
-        cmd!("tool.state", "Tool state", [], None, "{}", always, |s, _| Ok(serde_json::to_value(&s.tool).unwrap_or(Value::Null))),
+        cmd!("tool.state", "Tool state", [], None, "{}", always, |s, _| Ok(tool_state_json(s))),
     ]
 }
 
@@ -311,16 +311,42 @@ pub(crate) fn brush_json(session: &Session) -> Value {
     })
 }
 
-fn material(s: &mut Session, p: &Value) -> Result<Value> {
-    let channel = channel_param("tool.material", p, "channel")?;
-    let color = color_param("tool.material", p, "color")?;
-    let value = color_param("tool.material", p, "value")?;
-    let follow = crate::flow_params::follow_param("tool.material", p, channel)?;
-    if let Some(id) = strp(p, "material") {
-        let values = crate::materials::brush_values(id).ok_or_else(|| {
-            bad("tool.material", format!("`{id}` is not a simple material (a brush paints plain values; add smart materials with material.apply)"))
-        })?;
+/// The whole tool state, with the flow map's settings as an artist gives them (`flow`: follow,
+/// angle, speed and the packed value) beside the raw fields
+fn tool_state_json(session: &Session) -> Value {
+    let mut state = serde_json::to_value(&session.tool).unwrap_or(Value::Null);
+    if let Some(fields) = state.as_object_mut() {
+        fields.insert("flow".into(), crate::flow_params::tool_flow_json(&session.tool));
+    }
+    state
+}
 
+fn material(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "tool.material";
+
+    // Read and check the whole request first: a refused request changes nothing
+    let channel = channel_param(CMD, p, "channel")?;
+    let color = color_param(CMD, p, "color")?;
+    let value = color_param(CMD, p, "value")?;
+    let follow = crate::flow_params::follow_param(CMD, p, channel)?;
+    let polar = crate::flow_params::polar_params(CMD, p, channel)?;
+    let brush_material = match strp(p, "material") {
+        Some(id) => {
+            let values = crate::materials::brush_values(id)
+                .ok_or_else(|| bad(CMD, format!("`{id}` is not a simple material (a brush paints plain values; add smart materials with material.apply)")))?;
+            Some((crate::materials::find(id).map_or_else(|| id.to_string(), |found| found.id.to_string()), values))
+        }
+        None => None,
+    };
+    let uniform = match (channel, color.map(|color| ("color", color)).or(value.map(|value| ("value", value)))) {
+        (Some(c), Some((key, v))) => {
+            let v = if c == Channel::Height { v.map(|x| x.clamp(-1.0, 1.0)) } else { v.map(|x| x.clamp(0.0, 1.0)) };
+            Some(crate::flow_params::uniform_for(CMD, key, c, v)?)
+        }
+        _ => None,
+    };
+
+    if let Some((id, values)) = brush_material {
         // Reset omitted channels so values from the previous brush material do not persist
         // Normal maps remain flat, and a material never changes the flow direction being painted
         for channel in Channel::ALL {
@@ -331,22 +357,32 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
             let value = values.iter().find(|(set, _)| *set == channel).map_or(channel.default_value(), |(_, value)| *value);
             s.tool.values.insert(channel, value);
         }
-        s.tool.material = Some(crate::materials::find(id).map_or_else(|| id.to_string(), |m| m.id.to_string()));
+        s.tool.material = Some(id);
     }
     if let Some(v) = f32p(p, "maskValue") {
         s.tool.mask_value = v.clamp(0.0, 1.0);
     }
     if let Some(c) = channel {
-        let current = s.tool.values.get(&c).copied().unwrap_or(c.default_value());
-        let direction = crate::flow_params::flow_value_param("tool.material", p, c, current)?;
-        if let Some(v) = direction.or(color.or(value)) {
-            let v = if c == Channel::Height { v.map(|x| x.clamp(-1.0, 1.0)) } else { v.map(|x| x.clamp(0.0, 1.0)) };
-            let v = crate::flow_params::uniform_for(c, v);
-            s.tool.values.insert(c, v);
-            s.tool.enabled.insert(c);
-            s.tool.material = None;
+        let is_vector = c.kind() == texturecraft_core::ChannelKind::Vector;
+        match (polar, uniform) {
+            // A direction and a speed are the flow map's way of giving a value
+            (Some(polar), _) => crate::flow_params::set_tool_polar(&mut s.tool, polar),
+            (None, Some(v)) if is_vector => crate::flow_params::set_tool_flow_value(&mut s.tool, v),
+            (None, Some(v)) => {
+                s.tool.values.insert(c, v);
+            }
+            (None, None) => {}
         }
-        crate::flow_params::set_follow(&mut s.tool, c, follow, f32p(p, "angle").is_some() || color.or(value).is_some());
+        if polar.is_some() || uniform.is_some() {
+            s.tool.enabled.insert(c);
+
+            // A brush material has no flow of its own: it keeps its pattern under any direction
+            if !is_vector {
+                s.tool.material = None;
+            }
+        }
+        let direction_given = polar.is_some_and(|(angle, _)| angle.is_some()) || uniform.is_some();
+        crate::flow_params::set_follow(&mut s.tool, c, follow, direction_given);
         match boolp(p, "enabled") {
             Some(true) => {
                 s.tool.enabled.insert(c);

@@ -16,7 +16,8 @@ fn the_tool_and_inspect_report_whether_strokes_follow() {
     let state = execute(&mut session, "tool.state", &Value::Null).unwrap();
     let inspect = execute(&mut session, "project.inspect", &Value::Null).unwrap();
     assert_eq!(state["flow_follow"], json!(true), "the default");
-    assert_eq!(inspect["tool"]["flow"], json!({"follow": true, "angle": 0.0, "speed": 1.0}));
+    assert_eq!(inspect["tool"]["flow"], json!({"follow": true, "angle": 0.0, "speed": 1.0, "value": flow_from_polar(0.0, 1.0)}));
+    assert_eq!(state["flow"], inspect["tool"]["flow"], "the tool state says the same");
 
     let reply = execute(&mut session, "tool.material", &json!({"channel": "flow", "follow": false, "speed": 0.25})).unwrap();
 

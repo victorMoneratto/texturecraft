@@ -14,6 +14,7 @@ mod export_colour_space;
 mod filter_swap;
 mod filters;
 mod flow_code;
+mod flow_commands;
 mod flow_fills;
 mod flow_follow;
 mod flow_follow_perf;
