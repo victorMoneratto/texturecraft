@@ -140,3 +140,88 @@ fn a_saved_brush_names_the_follow_mode_only_when_it_paints_the_flow_map() {
 
     let _ = std::fs::remove_dir_all(directory);
 }
+
+/// A project without the flow map whose brush has the flow map switched on beside base colour
+fn plain_session_with_a_flow_brush() -> Session {
+    let mut session = Session::new_project("Plain", primitives::plane(2.0, 4), "builtin:plane", None, RESOLUTION).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "baseColor", "color": RED})).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": 45.0, "speed": 0.5, "enabled": true})).unwrap();
+    assert!(session.tool.enabled.contains(&Channel::Flow) && session.tool.enabled.contains(&Channel::BaseColor));
+    session
+}
+
+#[test]
+fn a_path_on_a_set_without_the_flow_map_does_not_name_it() {
+    let mut session = plain_session_with_a_flow_brush();
+
+    let committed = execute(&mut session, "tool.path", &json!({"uvPoints": [[0.2, 0.8], [0.8, 0.8]], "commit": true})).unwrap();
+    let effect = committed["committed"]["effect"].as_u64().unwrap();
+
+    // The released build reads these settings into its own channel list: no key may name the flow map
+    let stored = stored_paint(&session, effect, 0).to_string();
+    assert!(!stored.contains("Flow") && !stored.contains("flow_follow"), "{stored}");
+    assert!(stored.contains("BaseColor"), "the channel the path does paint is there: {stored}");
+
+    // Loading it for editing changes nothing, and the tool keeps the direction it had
+    let direction = session.tool.values[&Channel::Flow];
+    execute(&mut session, "path.edit", &json!({"effect": effect, "index": 0})).unwrap();
+    assert!(!session.path_live().unwrap(), "a loaded path matches its settings");
+    assert_eq!(session.tool.values[&Channel::Flow], direction);
+
+    // The whole project names the flow map nowhere
+    let project = serde_json::to_string(&session.doc.project).unwrap();
+    assert!(!project.contains("Flow"), "the project stays readable without the channel");
+}
+
+#[test]
+fn a_path_on_a_mask_does_not_name_the_flow_map() {
+    let mut session = follow_session();
+    execute(&mut session, "tool.material", &json!({"channel": "baseColor", "color": RED})).unwrap();
+    execute(&mut session, "mask.add.black", &Value::Null).unwrap();
+    let layer = session.selected_layer().unwrap();
+    execute(&mut session, "layer.select", &json!({"layer": layer.0, "target": "mask"})).unwrap();
+    assert!(session.tool.enabled.contains(&Channel::Flow), "the brush would paint the flow map on the layer's content");
+
+    let committed = execute(&mut session, "tool.path", &json!({"uvPoints": [[0.2, 0.8], [0.8, 0.8]], "commit": true})).unwrap();
+    let effect = committed["committed"]["effect"].as_u64().unwrap();
+
+    // A mask takes the gray alone, whatever the brush's channels are
+    let stored = stored_paint(&session, effect, 0).to_string();
+    assert!(!stored.contains("Flow") && !stored.contains("flow_follow"), "{stored}");
+
+    // Edited later, with the mask path selected, it still does not
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "enabled": true})).unwrap();
+    execute(&mut session, "path.edit", &json!({"effect": effect, "index": 0})).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": 10.0, "enabled": true})).unwrap();
+    execute(&mut session, "tool.path", &json!({"uvPoints": [[0.2, 0.6], [0.8, 0.6]], "commit": true})).unwrap();
+    let stored = stored_paint(&session, effect, 0).to_string();
+    assert!(!stored.contains("Flow") && !stored.contains("flow_follow"), "{stored}");
+}
+
+#[test]
+fn a_path_on_a_layer_with_the_flow_map_off_does_not_name_it() {
+    let mut session = follow_session();
+    execute(&mut session, "tool.material", &json!({"channel": "baseColor", "color": RED})).unwrap();
+    let layer = session.selected_layer().unwrap();
+    session.doc.project.layer_mut(layer).unwrap().channels.remove(&Channel::Flow);
+
+    let committed = execute(&mut session, "tool.path", &json!({"uvPoints": [[0.2, 0.8], [0.8, 0.8]], "commit": true})).unwrap();
+    let stored = stored_paint(&session, committed["committed"]["effect"].as_u64().unwrap(), 0).to_string();
+
+    assert!(!stored.contains("Flow") && !stored.contains("flow_follow"), "{stored}");
+}
+
+#[test]
+fn a_saved_brush_on_a_set_without_the_flow_map_does_not_name_it() {
+    let directory = std::env::temp_dir().join(format!("tc-flow-brush-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let mut session = plain_session_with_a_flow_brush();
+    session.load_brush_presets(directory.clone());
+
+    execute(&mut session, "brush.preset.store", &json!({"name": "Ink"})).unwrap();
+
+    let file = std::fs::read_to_string(directory.join("Ink.tcbrush")).unwrap();
+    assert!(!file.contains("Flow") && !file.contains("flow_follow"), "{file}");
+    assert!(file.contains("BaseColor"), "{file}");
+    let _ = std::fs::remove_dir_all(directory);
+}

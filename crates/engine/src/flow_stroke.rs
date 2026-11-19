@@ -5,11 +5,11 @@
 use std::collections::BTreeMap;
 
 use texturecraft_compose::PaintTarget;
-use texturecraft_core::{Channel, flow_to_polar};
+use texturecraft_core::{Channel, LayerId, flow_to_polar};
 use texturecraft_paint::{CommitSource, FlowProducer};
 use texturecraft_texel::TileImage;
 
-use crate::session::{ActiveStroke, Session, Tool, ToolState};
+use crate::session::{ActiveStroke, Session, StackTarget, Tool, ToolState};
 
 /// Whether `tool` makes strokes that can paint their own direction into the flow map. Paint,
 /// Projection and stroked paths can; a fill has no direction of its own, the eraser removes
@@ -28,17 +28,39 @@ pub fn follows_stroke(tool: &ToolState) -> bool {
     tool.flow_follow && can_follow_stroke(tool)
 }
 
+/// The layer whose content the tool's paint goes to: the selected layer, or the owner of the
+/// selected sublayer or of the stored path being edited (which is repainted where it lies,
+/// whatever is selected). None when the paint goes to a mask, which takes the gray alone.
+fn painted_content_layer(session: &Session) -> Option<LayerId> {
+    let project = &session.doc.project;
+    let edited_path = session.tool.path.editing.filter(|_| session.tool.tool == Tool::Path).map(|(sublayer, _)| sublayer);
+    let sublayer = match (edited_path, session.target) {
+        (Some(sublayer), _) | (None, StackTarget::Effect(sublayer)) => Some(sublayer),
+        (None, StackTarget::Mask) => return None,
+        (None, StackTarget::Content) => None,
+    };
+
+    let owner = match sublayer.and_then(|sublayer| project.effect(sublayer).map(|(owner, _)| (owner, sublayer))) {
+        Some((owner, sublayer)) => {
+            let in_content = project.layer(owner).is_ok_and(|layer| layer.content_effects.iter().any(|effect| effect.id == sublayer));
+            if !in_content {
+                return None;
+            }
+            owner
+        }
+        None => session.selected_layer()?,
+    };
+    Some(project.content_layer(owner).map_or(owner, |layer| layer.id))
+}
+
 /// Whether the tool's paint reaches a flow map: the channel is on in the brush's material, the
-/// active texture set has it and so does the layer that would be painted. Flow settings are
-/// stored with a path or a brush only then, so files that do not use the flow map never name it.
+/// active texture set has it, the paint goes to a layer's content and that layer has the
+/// channel. Flow settings are stored with a path or a brush only then, so a project or a brush
+/// that does not use the flow map never names it and stays readable by a build without it.
 pub(crate) fn paints_flow(session: &Session) -> bool {
     let project = &session.doc.project;
     let on_set = project.texture_set(session.ts()).is_ok_and(|set| set.has_channel(Channel::Flow));
-    let on_layer = session.selected_layer().is_some_and(|selected| {
-        let owner = project.effect(selected).map_or(selected, |(owner, _)| owner);
-        let painted = project.content_layer(owner).map_or(owner, |layer| layer.id);
-        project.layer(painted).is_ok_and(|layer| layer.channels.contains_key(&Channel::Flow))
-    });
+    let on_layer = painted_content_layer(session).is_some_and(|painted| project.layer(painted).is_ok_and(|layer| layer.channels.contains_key(&Channel::Flow)));
     session.tool.enabled.contains(&Channel::Flow) && on_set && on_layer
 }
 

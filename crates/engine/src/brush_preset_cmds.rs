@@ -222,9 +222,12 @@ fn store(session: &mut Session, params: &Value) -> Result<Value> {
     let existing = existing_index.and_then(|index| library.list.get(index));
     let name = existing.map_or(name, |preset| preset.name.clone());
     let old_file = existing.and_then(|preset| preset.file.clone());
-    let flow_follow = crate::flow_stroke::paints_flow(session).then_some(session.tool.flow_follow);
-    let mut stored_preset =
-        UserBrush { name: name.clone(), brush: session.tool.brush.sanitized(), channels: Some(session.tool.enabled.clone()), flow_follow, file: None };
+
+    // A brush that cannot paint the flow map here does not name it: a build without the channel reads the file
+    let paints_flow = crate::flow_stroke::paints_flow(session);
+    let flow_follow = paints_flow.then_some(session.tool.flow_follow);
+    let channels = session.tool.enabled.iter().copied().filter(|channel| *channel != texturecraft_core::Channel::Flow || paints_flow).collect();
+    let mut stored_preset = UserBrush { name: name.clone(), brush: session.tool.brush.sanitized(), channels: Some(channels), flow_follow, file: None };
     stored_preset.file = library.write(&stored_preset, old_file.as_deref()).map_err(|error| bad(CMD, error))?;
 
     match existing_index.and_then(|index| session.brush_presets.list.get_mut(index)) {

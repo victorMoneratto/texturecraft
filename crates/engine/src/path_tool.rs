@@ -477,10 +477,14 @@ impl Session {
         let (t, path) = (&self.tool, &self.tool.path);
 
         // A build without the flow map cannot read a path that names it, so a path that does not
-        // paint it must not mention it: the tool holds a value for every channel
-        let values = t.values.iter().filter(|(c, _)| **c != Channel::Flow || t.enabled.contains(c)).map(|(c, v)| (*c, *v)).collect();
-        let flow_follow = crate::flow_stroke::paints_flow(self).then_some(t.flow_follow);
-        let paint = PathPaint { brush: t.brush.clone(), values, enabled: t.enabled.clone(), mask_value: t.mask_value, camera, flow_follow };
+        // paint it must not mention it, in its values, its channels or its follow switch: the
+        // tool holds a value for every channel and keeps the flow map on for sets that lack it
+        let paints_flow = crate::flow_stroke::paints_flow(self);
+        let named = |channel: &Channel| *channel != Channel::Flow || paints_flow;
+        let values = t.values.iter().filter(|(channel, _)| named(channel)).map(|(channel, value)| (*channel, *value)).collect();
+        let enabled = t.enabled.iter().copied().filter(named).collect();
+        let flow_follow = paints_flow.then_some(t.flow_follow);
+        let paint = PathPaint { brush: t.brush.clone(), values, enabled, mask_value: t.mask_value, camera, flow_follow };
         PathShape {
             points: path.points.iter().map(|p| p.to_array()).collect(),
             corners: path.corner_flags(),
