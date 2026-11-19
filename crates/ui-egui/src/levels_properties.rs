@@ -22,8 +22,9 @@ pub(crate) fn levels_properties(app: &mut TextureCraftApp, ui: &mut Ui, layer: &
     ui.label(caption(tr("Levels")));
 
     let is_content = layer.content_effects.iter().any(|effect| effect.id == effect_id);
-    let channels: Vec<Channel> =
-        if is_content { layer.channels.keys().copied().filter(|channel| channel.kind() != ChannelKind::NormalMap).collect() } else { Vec::new() };
+    // Levels remap levels: a normal map and a flow map hold directions and pass through unchanged
+    let remapped = |channel: &Channel| !matches!(channel.kind(), ChannelKind::NormalMap | ChannelKind::Vector);
+    let channels: Vec<Channel> = if is_content { layer.channels.keys().copied().filter(remapped).collect() } else { Vec::new() };
     let picked = egui::Id::unique(("levels_channel", effect_id.0));
     let channel = ui
         .data(|data| data.get_temp(picked))

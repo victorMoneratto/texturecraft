@@ -12,6 +12,7 @@ mod ask;
 mod bake_job;
 pub mod bake_mode;
 mod bake_scene;
+mod channel_blend;
 mod color_management;
 mod color_selection_editor;
 pub mod control;

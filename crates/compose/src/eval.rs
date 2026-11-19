@@ -1282,7 +1282,7 @@ fn plan_levels<'a>(inp: &Inputs<'a>, levels: &[Level], channels: &[Channel], tx:
 /// would give full flow. A vector channel therefore always blends in Normal mode. Resolved
 /// before anything reads the mode: Replace also changes the weight a layer is laid over with
 #[inline]
-fn effective_blend(kind: ChannelKind, stored: BlendMode) -> BlendMode {
+pub fn effective_blend(kind: ChannelKind, stored: BlendMode) -> BlendMode {
     if kind == ChannelKind::Vector { BlendMode::Normal } else { stored }
 }
 

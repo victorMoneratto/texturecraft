@@ -796,12 +796,16 @@ fn layer_row(app: &mut TextureCraftApp, ui: &mut Ui, layer: &Layer, depth: usize
         Rect::from_min_size(pos2(rect.right() - RIGHT_COLUMN - ROW_CONTROL_GAP, rect.center().y + ROW_STACK_GAP), vec2(RIGHT_COLUMN, ROW_CONTROL_HEIGHT));
     if let Some(channel_blend) = blend.filter(|_| show_blend) {
         let id = ui.scope_id().with(("blend", layer.id.0));
+
+        // A channel with one mode only shows it, with the reason in place of the menu
+        let (shown_mode, fixed_mode) = crate::channel_blend::shown_blend(channel, channel_blend.mode);
         let (mode, opacity) = blend_controls(
             ui,
             id,
             (mode_rect, opacity_rect),
-            (channel_blend.mode, channel_blend.opacity),
-            (tr("Blending mode of the displayed channel"), &layer.name),
+            (shown_mode, channel_blend.opacity),
+            (fixed_mode.map_or(tr("Blending mode of the displayed channel"), tr), &layer.name),
+            fixed_mode.is_some(),
         );
         if let Some(mode) = mode {
             app.run("layer.blend", json!({"layer": layer.id.0, "channel": channel.id(), "mode": format!("{mode:?}")}));
@@ -997,16 +1001,25 @@ fn blend_controls(
     (mode_rect, opacity_rect): (Rect, Rect),
     (mode, opacity): (BlendMode, f32),
     (hover, row_name): (&str, &str),
+    mode_fixed: bool,
 ) -> (Option<BlendMode>, Option<(f32, bool)>) {
     let tokens = Tokens::get(ui.ctx());
     let painter = ui.painter().clone();
 
     let mut picked = None;
+    let mode_font = egui::FontId::proportional(ROW_SMALL_FONT_SIZE);
+    if mode_fixed {
+        // No menu and no caret: the mode is told, not offered, and `hover` says why
+        let told = ui.interact(mode_rect, id, Sense::hover()).on_hover_text(hover);
+        told.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, hover));
+        painter.text(mode_rect.right_center() - vec2(CARET_WIDTH, 0.0), egui::Align2::RIGHT_CENTER, mode.short(), mode_font, tokens.text_dim);
+        return (None, opacity_field(ui, id, opacity_rect, opacity, row_name));
+    }
+
     let menu = ui.interact(mode_rect, id, Sense::click()).on_hover_text(hover);
     if menu.hovered() {
         painter.rect_filled(mode_rect, ROW_CONTROL_ROUNDING, tokens.row_hover);
     }
-    let mode_font = egui::FontId::proportional(ROW_SMALL_FONT_SIZE);
     painter.text(mode_rect.right_center() - vec2(CARET_WIDTH, 0.0), egui::Align2::RIGHT_CENTER, mode.short(), mode_font, tokens.text);
     painter.text(mode_rect.right_center(), egui::Align2::RIGHT_CENTER, ic::CARET_DOWN, egui::FontId::proportional(CARET_FONT_SIZE), tokens.text_dim);
     egui::Popup::menu(&menu).show(|ui| {
@@ -1026,6 +1039,12 @@ fn blend_controls(
         }
     });
 
+    (picked, opacity_field(ui, id, opacity_rect, opacity, row_name))
+}
+
+/// A stack row's opacity field (percent, named after row `row_name`): the opacity (0..1) set this frame with whether it continues a drag.
+fn opacity_field(ui: &mut Ui, id: egui::Id, opacity_rect: Rect, opacity: f32, row_name: &str) -> Option<(f32, bool)> {
+    let tokens = Tokens::get(ui.ctx());
     let mut percent = (opacity * 100.0).round();
     let mut field_ui = ui.new_child(egui::UiBuilder::new().max_rect(opacity_rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
     // As tall as its slot in the row (the style's fields are taller), in the row's small print
@@ -1054,7 +1073,7 @@ fn blend_controls(
     if field.changed() || field.drag_started() {
         ui.data_mut(|data| data.insert_temp(drag_changed_id, field.changed() && field.dragged()));
     }
-    (picked, field.changed().then_some((percent / 100.0, merge)))
+    field.changed().then_some((percent / 100.0, merge))
 }
 
 /// Effect `effect` of `stack` (a layer's content or, with `in_mask`, mask effects) at indent `level`.
@@ -1140,7 +1159,7 @@ fn effect_row(
         let opacity_rect = Rect::from_center_size(opacity_center, vec2(EFFECT_OPACITY_WIDTH, ROW_CONTROL_HEIGHT));
         let id = ui.scope_id().with(("eff_blend", effect_id.0));
         let (mode, opacity) =
-            blend_controls(ui, id, (mode_rect, opacity_rect), (effect.blend, effect.opacity), (tr("Blending mode of the effect"), &effect.name));
+            blend_controls(ui, id, (mode_rect, opacity_rect), (effect.blend, effect.opacity), (tr("Blending mode of the effect"), &effect.name), false);
         if let Some(mode) = mode {
             app.run("effect.set", json!({"effect": effect_id.0, "blend": format!("{mode:?}")}));
         }
