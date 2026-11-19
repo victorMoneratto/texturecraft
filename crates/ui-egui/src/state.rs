@@ -361,7 +361,9 @@ pub struct UiState {
     pub windows: Windows,
     pub uv_zoom: f32,
     pub uv_pan: [f32; 2],
-    /// Channel whose blending the layer rows show.
+    /// Channel whose blending the layer rows show. The released build reads this field too: a
+    /// channel it lacks is saved as one it has, and kept beside the state (`fork_only_ui`)
+    #[serde(serialize_with = "crate::fork_only_ui::serialize_for_released_build")]
     pub layer_channel: Channel,
     pub shelf_filter: String,
     /// The asset shelf's picked type: an index into the shelf's types, or past them for every type

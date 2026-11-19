@@ -27,6 +27,7 @@ mod filter_slot;
 mod flow_aux;
 mod flow_edit;
 pub mod fonts;
+mod fork_only_ui;
 mod generator_panel;
 pub mod gpu;
 mod gray_slider;

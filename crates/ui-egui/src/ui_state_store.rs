@@ -94,7 +94,8 @@ impl UiStateStore {
             return;
         }
 
-        let json = match serde_json::to_string_pretty(ui) {
+        // With what the released build cannot read under keys of this build's own
+        let json = match serde_json::to_string_pretty(&crate::fork_only_ui::SavedUi::of(ui)) {
             Ok(json) => json,
             Err(error) => {
                 self.warn(&format!("Settings could not be encoded: {error}. The previous settings have been kept."));
@@ -174,6 +175,7 @@ fn migrate_shelf_tab(ui: &mut UiState, has_shelf_path: bool) {
 /// Decode JSON settings and map the old Textures index only when its new fields are absent
 fn decode_json_ui(bytes: &[u8]) -> Option<UiState> {
     let mut ui = serde_json::from_slice::<UiState>(bytes).ok()?;
+    crate::fork_only_ui::ForkOnlyUi::read(bytes).restore(&mut ui);
     if ui.shelf_tab == LEGACY_TEXTURES_TAB {
         let has_shelf_path = serde_json::from_slice::<serde_json::Value>(bytes)
             .ok()
@@ -293,6 +295,9 @@ fn keep_file_copy(_file: &Path, _bytes: &[u8], _extension: &str) -> bool {
 
 #[cfg(test)]
 mod memory_storage;
+
+#[cfg(test)]
+mod released_build_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
