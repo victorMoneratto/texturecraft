@@ -2542,12 +2542,8 @@ fn material_controls(app: &mut TextureCraftApp, ui: &mut Ui) {
                 ui.label(RichText::new(tr("Normal: painting uses the flat normal")).color(tokens.text_dim));
             }
             ChannelKind::Vector => {
-                // The stored value is the vector itself: a still value forgets its direction
-                let (mut angle_degrees, mut speed) = texturecraft_engine::core::flow_to_polar(value);
-                let turned = slider(ui, tr("Flow direction"), &mut angle_degrees, 0.0..=360.0, 0).changed();
-                let paced = slider(ui, tr("Flow speed"), &mut speed, 0.0..=1.0, 2).changed();
-                if turned || paced {
-                    app.session.tool.values.insert(channel, texturecraft_engine::core::flow_from_polar(angle_degrees, speed));
+                if let Some(edit) = crate::flow_edit::FlowEdit::sliders(ui, egui::Id::unique(("tool_flow_direction", channel.id())), value) {
+                    app.session.tool.values.insert(channel, edit.value());
                 }
             }
             ChannelKind::Signed => {
@@ -3064,6 +3060,13 @@ fn fill_channel(app: &mut TextureCraftApp, ui: &mut Ui, fill: &Fill, base: &Valu
                 let mut value = *value;
                 if color_swatch(ui, &format!("fill_{salt}_{}", channel.id()), &mut value, ui.available_width() - CHANNEL_SWATCH_MARGIN) {
                     app.run("layer.fill.set", set(json!({"color": value})));
+                }
+            }
+            Source::Uniform(value) if channel.kind() == ChannelKind::Vector => {
+                // A flow map's value is a vector: one 0..1 number says nothing about it
+                let editor = egui::Id::unique(("fill_flow_direction", salt, channel.id()));
+                if let Some(edit) = crate::flow_edit::FlowEdit::sliders(ui, editor, *value) {
+                    app.run("layer.fill.set", set(json!({"angle": edit.angle_degrees, "speed": edit.speed, "merge": edit.merge})));
                 }
             }
             Source::Uniform(value) => {

@@ -24,6 +24,7 @@ mod file_dialogs;
 mod fill_channel_image;
 mod fill_projection_section;
 mod filter_picker;
+mod flow_map;
 mod frame_selection;
 mod generator_panel;
 mod gradient_map_menu;

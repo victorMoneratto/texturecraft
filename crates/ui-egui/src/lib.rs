@@ -24,6 +24,7 @@ pub mod file_dialogs;
 mod fill_source_slot;
 mod fill_source_target;
 mod filter_slot;
+mod flow_edit;
 pub mod fonts;
 mod generator_panel;
 pub mod gpu;
