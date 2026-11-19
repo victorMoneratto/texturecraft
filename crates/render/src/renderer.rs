@@ -42,6 +42,7 @@ use crate::overlay_quad::OverlayQuad;
 use crate::set_highlight::SetHighlight;
 use crate::subdivide::{self, Vertex};
 
+mod fill_aux;
 mod upload_aux_region;
 
 pub const MSAA: u32 = 4;

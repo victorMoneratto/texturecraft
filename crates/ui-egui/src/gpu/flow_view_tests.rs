@@ -32,12 +32,32 @@ fn flow_session(resolution: u32) -> Session {
 #[derive(Default)]
 struct Sent {
     whole: Vec<(usize, u32, Vec<u8>)>,
+    /// Sets whose aux texture was made one texel of a colour
+    fills: Vec<(usize, [u8; 4])>,
     regions: Vec<(usize, AuxRegion)>,
 }
 
 impl Sent {
     fn bytes(&self) -> usize {
-        self.whole.iter().map(|(_, _, rgba)| rgba.len()).sum::<usize>() + self.regions.iter().map(|(_, region)| region.rgba.len()).sum::<usize>()
+        let images = self.whole.iter().map(|(_, _, rgba)| rgba.len()).sum::<usize>();
+        let regions = self.regions.iter().map(|(_, region)| region.rgba.len()).sum::<usize>();
+        images + regions + self.fills.len() * TEXEL_BYTES
+    }
+
+    /// The aux image of `texture_set` once everything sent was applied in order: the last
+    /// whole image with the regions sent after it pasted in. None when no whole image was sent
+    fn assembled(&self, texture_set: usize) -> Option<Vec<u8>> {
+        let (_, side, whole) = self.whole.iter().rev().find(|(set, ..)| *set == texture_set)?;
+        let mut image = whole.clone();
+        for (_, region) in self.regions.iter().filter(|(set, region)| *set == texture_set && region.side == *side) {
+            for row in 0..region.height {
+                let from = (row * region.width) as usize * TEXEL_BYTES;
+                let to = ((region.y + row) * side + region.x) as usize * TEXEL_BYTES;
+                let bytes = region.width as usize * TEXEL_BYTES;
+                image.get_mut(to..to + bytes)?.copy_from_slice(region.rgba.get(from..from + bytes)?);
+            }
+        }
+        Some(image)
     }
 
     /// The colour the regions sent for aux texel (`x`, `y`) of `texture_set`, the last one winning
@@ -55,6 +75,7 @@ fn show(gpu: &mut GpuLink, session: &mut Session, view: Option<AuxView>) -> Sent
     loop {
         let mut frame = gpu.sync(session, view, None, 0, 0.0);
         sent.whole.append(&mut frame.aux);
+        sent.fills.append(&mut frame.aux_fills);
         sent.regions.append(&mut frame.aux_regions);
         if session.pending_tiles() == 0 && session.caches.iter().all(|cache| cache.upload.is_empty()) {
             return sent;
@@ -74,10 +95,14 @@ fn the_whole_flow_map_goes_up_once() {
 
     let first = show(&mut gpu, &mut session, Some(AuxView::Flow));
 
+    // A frame has a time budget: the whole image can go up before every tile is composited, and
+    // the rest follows as regions. What the texture ends up holding is all of them together
+    assert_eq!(first.whole.len(), 1, "the whole image goes up once");
     let (set, side, rgba) = first.whole.last().expect("the flow map is sent");
     assert_eq!((*set, *side, rgba.len()), (0, 256, 256 * 256 * TEXEL_BYTES));
-    assert_eq!(texel(rgba, 256, 128, 128), RIGHT, "the stroke");
-    assert_eq!(texel(rgba, 256, 128, 230), FLOW_VIEW_STILL, "away from the stroke");
+    let shown = first.assembled(0).expect("the flow map is sent");
+    assert_eq!(texel(&shown, 256, 128, 128), RIGHT, "the stroke");
+    assert_eq!(texel(&shown, 256, 128, 230), FLOW_VIEW_STILL, "away from the stroke");
 
     let later = show(&mut gpu, &mut session, Some(AuxView::Flow));
     assert_eq!(later.bytes(), 0, "nothing changed: nothing is sent");
@@ -149,8 +174,8 @@ fn tiles_painted_while_another_view_is_shown_come_with_the_next_whole_image() {
     assert_eq!(show(&mut gpu, &mut session, None).bytes(), 0, "another view sends nothing to the aux texture");
 
     let back = show(&mut gpu, &mut session, Some(AuxView::Flow));
-    let (_, _, rgba) = back.whole.last().expect("coming back sends the whole flow map");
-    assert_eq!(texel(rgba, 256, 128, 128), RIGHT, "with the stroke painted meanwhile");
+    let shown = back.assembled(0).expect("coming back sends the whole flow map");
+    assert_eq!(texel(&shown, 256, 128, 128), RIGHT, "with the stroke painted meanwhile");
 }
 
 #[test]
@@ -167,8 +192,8 @@ fn the_quick_mask_takes_the_aux_texture_and_the_flow_view_takes_it_back() {
 
     execute(&mut session, "viewport.quickMask.edit", &json!({"editing": false})).unwrap();
     let back = show(&mut gpu, &mut session, Some(AuxView::Flow));
-    let (_, _, rgba) = back.whole.last().expect("the flow map replaces the overlay");
-    assert_eq!(texel(rgba, 256, 128, 128), RIGHT);
+    let shown = back.assembled(0).expect("the flow map replaces the overlay");
+    assert_eq!(texel(&shown, 256, 128, 128), RIGHT);
 }
 
 #[test]
@@ -180,16 +205,15 @@ fn removing_the_channel_sends_still_water_and_nothing_after_it() {
     execute(&mut session, "textureSet.channel.remove", &json!({"channel": "flow"})).unwrap();
     let removed = show(&mut gpu, &mut session, Some(AuxView::Flow));
 
-    let (_, _, rgba) = removed.whole.last().expect("the stale picture is replaced");
-    assert!(rgba.as_chunks::<4>().0.iter().all(|pixel| *pixel == FLOW_VIEW_STILL), "nothing flows without the channel");
+    assert_eq!(removed.fills, [(0, FLOW_VIEW_STILL)], "the stale picture is replaced by still water: nothing flows without the channel");
+    assert!(removed.whole.is_empty(), "with no image built for it");
     assert!(removed.regions.is_empty(), "the tiles composited again have no flow to show");
 
     // Undo brings the channel and the stroke back
     execute(&mut session, "edit.undo", &Value::Null).unwrap();
     let restored = show(&mut gpu, &mut session, Some(AuxView::Flow));
-    let (_, _, rgba) = restored.whole.first().expect("the flow map is sent again");
-    let shown = restored.region_texel(0, 128, 128).unwrap_or(texel(rgba, 256, 128, 128));
-    assert_eq!(shown, RIGHT);
+    let shown = restored.assembled(0).expect("the flow map is sent again");
+    assert_eq!(texel(&shown, 256, 128, 128), RIGHT);
 }
 
 #[test]
@@ -202,11 +226,13 @@ fn each_texture_set_shows_its_own_flow_map() {
     let mut gpu = link();
 
     let first = show(&mut gpu, &mut session, Some(AuxView::Flow));
-    assert_eq!(first.whole.iter().map(|(set, _, _)| *set).collect::<BTreeSet<_>>(), (0..session.set_count()).collect(), "every set's aux texture is filled");
-    for (set, _, rgba) in &first.whole {
-        let still = rgba.as_chunks::<4>().0.iter().all(|pixel| *pixel == FLOW_VIEW_STILL);
-        assert_eq!(still, *set != 0, "set {set}: only the set with the channel flows");
-    }
+    let sent_to: BTreeSet<usize> = first.whole.iter().map(|(set, _, _)| *set).chain(first.fills.iter().map(|(set, _)| *set)).collect();
+    assert_eq!(sent_to, (0..session.set_count()).collect(), "every set's aux texture is filled");
+
+    // The set with the channel gets its image; the others one still texel and no image
+    assert_eq!(first.whole.iter().map(|(set, _, _)| *set).collect::<Vec<_>>(), [0]);
+    assert!(first.assembled(0).unwrap().as_chunks::<4>().0.iter().all(|pixel| *pixel == RIGHT), "set 0 flows");
+    assert!(first.fills.iter().all(|(set, texel)| *set != 0 && *texel == FLOW_VIEW_STILL), "{:?}", first.fills);
 
     // Making another set the active one changes nothing on screen: nothing is sent
     execute(&mut session, "textureSet.select", &json!({"ts": 1})).unwrap();
@@ -223,6 +249,8 @@ struct AppGpu {
     queue: wgpu::Queue,
     resources: CallbackResources,
     link: GpuLink,
+    /// Bytes of every whole aux image the frames sent, with its texture set, in order
+    whole_images: Vec<(usize, usize)>,
 }
 
 impl AppGpu {
@@ -237,10 +265,11 @@ impl AppGpu {
             renderer: headless.renderer,
             reset: link.reset.clone(),
             recreated: link.recreated.clone(),
+            aux_after_recreation: link.aux_after_recreation.clone(),
             reports: link.reports.clone(),
             ctx: egui::Context::default(),
         });
-        Some(AppGpu { device: headless.device, queue: headless.queue, resources, link })
+        Some(AppGpu { device: headless.device, queue: headless.queue, resources, link, whole_images: Vec::new() })
     }
 
     /// Draw one frame of the 2D view as the app does (scene sync, uploads, render) and return
@@ -248,6 +277,7 @@ impl AppGpu {
     fn frame_2d(&mut self, session: &mut Session, view: Option<AuxView>, [u, v]: [f32; 2]) -> [u8; 4] {
         const VIEW: u32 = 200;
         let sync = self.link.sync(session, view, None, 0, 0.0);
+        self.whole_images.extend(sync.aux.iter().map(|(set, _, rgba)| (*set, rgba.len())));
         let frame = Frame {
             view_id: crate::viewport::VIEW_2D,
             size: [VIEW, VIEW],
@@ -326,4 +356,75 @@ fn the_app_clears_the_flow_view_when_the_channel_is_removed() {
 
     let removed = gpu.settled_2d(&mut session, Some(AuxView::Flow), painted);
     assert!(shows(removed, FLOW_VIEW_STILL), "{removed:?}");
+}
+
+/// A mesh of `count` planes, each with a material of its own: a project of `count` texture sets
+fn planes(count: usize) -> texturecraft_engine::geom::Mesh {
+    let mut mesh = primitives::plane(2.0, 4);
+    for _ in 1..count {
+        mesh.append(&primitives::plane(2.0, 4));
+    }
+    mesh
+}
+
+/// A project of `sets` texture sets of `resolution`, the first `with_channel` of them with the
+/// flow map, showing it
+fn flow_project(sets: usize, with_channel: usize, resolution: u32) -> Session {
+    let mut session = Session::new_project("Sets", planes(sets), "builtin:planes", None, resolution).unwrap();
+    assert_eq!(session.set_count(), sets);
+    for set in 0..with_channel {
+        execute(&mut session, "textureSet.channel.add", &json!({"ts": set, "channel": "flow"})).unwrap();
+    }
+    execute(&mut session, "viewport.view", &json!({"mode": "flow"})).unwrap();
+    session
+}
+
+#[test]
+fn entering_the_flow_view_builds_an_image_only_for_the_sets_that_have_the_channel() {
+    const SIDE: u32 = 2048;
+    let image_bytes = (SIDE * SIDE) as usize * TEXEL_BYTES;
+
+    for (sets, with_channel) in [(1, 1), (4, 1), (4, 4)] {
+        let (mut gpu, mut session) = (link(), flow_project(sets, with_channel, SIDE));
+
+        // The project is composited and shown in another view first, as when a user switches views
+        assert_eq!(show(&mut gpu, &mut session, None).bytes(), 0);
+
+        let entered = show(&mut gpu, &mut session, Some(AuxView::Flow));
+
+        let whole: usize = entered.whole.iter().map(|(_, _, rgba)| rgba.len()).sum();
+        eprintln!("flow view entered, {sets} sets of {SIDE} ({with_channel} with the channel): {whole} bytes of whole images");
+        assert_eq!(whole, with_channel * image_bytes, "{sets} sets, {with_channel} with the channel");
+        assert_eq!(entered.whole.iter().map(|(set, ..)| *set).collect::<Vec<_>>(), (0..with_channel).collect::<Vec<_>>());
+
+        // The sets without the channel are still water at the cost of one texel each
+        assert_eq!(entered.fills, (with_channel..sets).map(|set| (set, FLOW_VIEW_STILL)).collect::<Vec<_>>());
+        assert_eq!(entered.bytes(), whole + (sets - with_channel) * TEXEL_BYTES);
+    }
+}
+
+#[test]
+fn a_renderer_that_recreates_its_textures_gets_the_whole_flow_map_once() {
+    let Some(mut gpu) = AppGpu::new() else { return };
+    let mut session = flow_session(256);
+    let painted = [0.44, 0.36];
+    session.stroke_uv_points(&[Vec2::new(0.3, painted[1]), Vec2::new(0.7, painted[1])]).unwrap();
+    let image_bytes = |side: usize| side * side * TEXEL_BYTES;
+
+    // The first frames create the set's textures, which the renderer reports as a recreation
+    let shown = gpu.settled_2d(&mut session, Some(AuxView::Flow), painted);
+    assert!(shows(shown, RIGHT), "{shown:?}");
+    eprintln!("flow view on a new renderer, one 256 set: whole images {:?}", gpu.whole_images);
+    assert_eq!(gpu.whole_images, [(0, image_bytes(256))], "one whole image for the new renderer");
+
+    // Idle frames send nothing more
+    gpu.settled_2d(&mut session, Some(AuxView::Flow), painted);
+    assert_eq!(gpu.whole_images.len(), 1);
+
+    // Another size recreates the textures again: one more whole image, and the picture is right
+    execute(&mut session, "textureSet.resolution", &json!({"ts": 0, "resolution": 512})).unwrap();
+    let resized = gpu.settled_2d(&mut session, Some(AuxView::Flow), painted);
+    assert!(shows(resized, RIGHT), "after the resize: {resized:?}");
+    eprintln!("after a resize to 512: whole images {:?}", gpu.whole_images);
+    assert_eq!(gpu.whole_images, [(0, image_bytes(256)), (0, image_bytes(512))]);
 }

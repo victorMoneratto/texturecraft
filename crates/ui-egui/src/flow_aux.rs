@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use rayon::prelude::*;
 use texturecraft_engine::Session;
+use texturecraft_engine::compose::FLOW_VIEW_STILL;
 use texturecraft_engine::core::Channel;
 use texturecraft_render::flow_view::{flow_view_rgba, flow_view_tile};
 
@@ -23,16 +24,21 @@ fn content(has_channel: bool) -> AuxContent {
     (FLOW_CONTENT.to_owned(), u64::from(has_channel))
 }
 
-/// Queue what the flow view needs in `out`: the whole image for a set whose aux texture holds
-/// something else, and otherwise only the texels showing the tiles in `composited` (texture
-/// set, tiles), the ones this frame sent to the display textures.
+/// Queue what the flow view needs in `out`. A set whose aux texture holds something else gets
+/// its whole image when it has the channel, and one still texel to stretch over it when it has
+/// not: no image is built for a set with nothing to show. Afterwards only the texels showing
+/// the tiles in `composited` (texture set, tiles) go up, the ones this frame sent to the
+/// display textures.
 pub(crate) fn sync(held: &mut BTreeMap<usize, AuxContent>, session: &Session, composited: &[(usize, Vec<(u32, u32)>)], out: &mut SceneSync) {
     for (texture_set, cache) in session.caches.iter().enumerate() {
-        let side = texturecraft_render::aux_size(cache.size);
         let has_channel = cache.composite.channels.contains_key(&Channel::Flow);
         let shown = content(has_channel);
         if held.get(&texture_set) != Some(&shown) {
-            out.aux.push((texture_set, side, flow_view_rgba(&cache.composite)));
+            if has_channel {
+                out.aux.push((texture_set, texturecraft_render::aux_size(cache.size), flow_view_rgba(&cache.composite)));
+            } else {
+                out.aux_fills.push((texture_set, FLOW_VIEW_STILL));
+            }
             held.insert(texture_set, shown);
             continue;
         }

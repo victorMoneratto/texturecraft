@@ -43,6 +43,8 @@ pub struct SceneSync {
     pub env: Option<(String, Option<Arc<ImageRes>>)>,
     pub tiles: Vec<(usize, DisplayKind, u32, u32, Vec<u8>)>,
     pub aux: Vec<(usize, u32, Vec<u8>)>,
+    /// Texture sets whose aux texture shows one colour everywhere (RGBA8), with no image of it
+    pub aux_fills: Vec<(usize, [u8; 4])>,
     /// Parts of aux textures that changed, by texture set: applied after `aux`
     pub aux_regions: Vec<(usize, texturecraft_render::AuxRegion)>,
     /// Bake mode's high poly (`None` removes it) and the id it is sent under
@@ -64,6 +66,9 @@ pub struct GpuState {
     pub reset: Arc<AtomicBool>,
     /// Recreated sets and the display kinds uploaded since recreation, for [`GpuLink`].
     pub recreated: Arc<Mutex<BTreeMap<usize, BTreeSet<DisplayKind>>>>,
+    /// The sets given a whole aux image or fill by the frame that recreated textures, after
+    /// the recreation: what [`GpuLink`] recorded of their aux textures still holds.
+    pub aux_after_recreation: Arc<Mutex<BTreeSet<usize>>>,
     pub reports: Arc<Mutex<GpuReports>>,
     /// Wakes the UI when the GPU side has something to report.
     pub ctx: egui::Context,
@@ -86,6 +91,8 @@ pub struct GpuLink {
     pub reset: Arc<AtomicBool>,
     /// [`GpuState::recreated`].
     recreated: Arc<Mutex<BTreeMap<usize, BTreeSet<DisplayKind>>>>,
+    /// [`GpuState::aux_after_recreation`].
+    aux_after_recreation: Arc<Mutex<BTreeSet<usize>>>,
     pub reports: Arc<Mutex<GpuReports>>,
     /// Raised when a view callback was dropped before the GPU applied its scene sync (the
     /// frame was never painted, e.g. a WebGPU surface not ready yet): send everything again.
@@ -126,6 +133,7 @@ const UPLOAD_MS_PER_TILE: f64 = 0.006;
 pub fn init(rs: &egui_wgpu::RenderState, ctx: &egui::Context) -> GpuLink {
     let reset = Arc::new(AtomicBool::new(false));
     let recreated = Arc::new(Mutex::new(BTreeMap::new()));
+    let aux_after_recreation = Arc::new(Mutex::new(BTreeSet::new()));
     let reports = Arc::new(Mutex::new(GpuReports::default()));
     // wgpu's default handler panics on any error no scope caught (an out-of-memory texture, a
     // driver hiccup): report it instead, so the user keeps the session.
@@ -145,6 +153,7 @@ pub fn init(rs: &egui_wgpu::RenderState, ctx: &egui::Context) -> GpuLink {
         renderer,
         reset: reset.clone(),
         recreated: recreated.clone(),
+        aux_after_recreation: aux_after_recreation.clone(),
         reports: reports.clone(),
         ctx: ctx.clone(),
     });
@@ -152,6 +161,7 @@ pub fn init(rs: &egui_wgpu::RenderState, ctx: &egui::Context) -> GpuLink {
     GpuLink {
         reset,
         recreated,
+        aux_after_recreation,
         reports,
         lost: Arc::new(AtomicBool::new(false)),
         mesh_id: 0,
@@ -199,6 +209,9 @@ impl GpuLink {
             self.env = Default::default();
             self.bake_scene.resend();
             self.reset.store(true, Ordering::Release);
+
+            // Nothing of the lost frame arrived, its aux images included
+            self.aux_after_recreation.lock().unwrap_or_else(PoisonError::into_inner).clear();
         }
 
         if self.mesh_id != session.mesh_id {
@@ -229,7 +242,11 @@ impl GpuLink {
             for cache in &mut session.caches {
                 cache.upload.extend(texturecraft_engine::compose::all_tiles(cache.size.0, cache.size.1));
             }
-            self.aux.clear();
+
+            // A recreated aux texture is empty again, unless the frame that recreated it also
+            // brought its image: that one went into the new texture and is not sent twice
+            let kept = std::mem::take(&mut *self.aux_after_recreation.lock().unwrap_or_else(PoisonError::into_inner));
+            self.aux.retain(|texture_set, _| kept.contains(texture_set));
         }
         for (texture_set, kinds) in std::mem::take(&mut *self.recreated.lock().unwrap_or_else(PoisonError::into_inner)) {
             if texture_set < self.sets.len() {
@@ -425,11 +442,18 @@ impl CallbackTrait for ViewCallback {
                 gpu.renderer.upload_tile(device, queue, *texture_set, *kind, *tile_x, *tile_y, bytes);
             }
             record_recreated_uploads(&mut gpu.recreated.lock().unwrap_or_else(PoisonError::into_inner), &reset, &sync);
-            if !reset.is_empty() {
-                gpu.reset.store(true, Ordering::Release);
+            for (texture_set, texel) in &sync.aux_fills {
+                gpu.renderer.fill_aux(device, queue, *texture_set, *texel);
             }
             for (texture_set, size, bytes) in &sync.aux {
                 gpu.renderer.upload_aux(device, queue, *texture_set, *size, bytes);
+            }
+            if !reset.is_empty() {
+                gpu.reset.store(true, Ordering::Release);
+
+                // These went into the textures as they are now
+                let supplied = sync.aux.iter().map(|(texture_set, ..)| *texture_set).chain(sync.aux_fills.iter().map(|(texture_set, _)| *texture_set));
+                *gpu.aux_after_recreation.lock().unwrap_or_else(PoisonError::into_inner) = supplied.collect();
             }
             for (texture_set, region) in &sync.aux_regions {
                 gpu.renderer.upload_aux_region(device, queue, *texture_set, region);
@@ -514,6 +538,7 @@ mod tests {
         GpuLink {
             reset: Arc::default(),
             recreated: Arc::default(),
+            aux_after_recreation: Arc::default(),
             reports: Arc::default(),
             lost: Arc::default(),
             mesh_id: 0,
