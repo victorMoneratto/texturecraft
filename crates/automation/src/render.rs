@@ -3,6 +3,7 @@
 
 use rayon::prelude::*;
 use texturecraft_engine::compose::{DisplayKind, all_tiles, tile_bytes};
+use texturecraft_engine::core::Channel;
 use texturecraft_engine::{Session, ViewMode};
 use texturecraft_render::displace::trace_geometry;
 use texturecraft_render::gpu_trace::GpuTracer;
@@ -74,6 +75,7 @@ impl Gpu {
             let aux = match s.view {
                 ViewMode::MeshMap(m) => Some(texturecraft_render::mesh_maps::mesh_map_rgba(s.doc.baked.get(&ts), m, res, cache.size, &comp.block_scales)),
                 ViewMode::Mask(id) if s.doc.project.locate(id).is_some_and(|(t, _, _)| t == ts) => s.mask_view_rgba(id, res),
+                ViewMode::Channel(Channel::Flow) => Some(texturecraft_render::flow_view::flow_view_rgba(comp, res)),
                 _ => None,
             };
             if let Some(rgba) = aux {
@@ -157,6 +159,9 @@ pub fn path_trace(
 pub fn shade(s: &Session) -> Shade {
     let (view_mode, channel) = match s.view {
         ViewMode::Material => (0, 0),
+
+        // No display texture holds the flow map: its raw view reads the aux texture
+        ViewMode::Channel(Channel::Flow) => (2, 0),
         ViewMode::Channel(c) => (1, c.index() as u32),
         ViewMode::MeshMap(_) | ViewMode::Mask(_) => (2, 0),
         ViewMode::UvChecker => (3, 0),
