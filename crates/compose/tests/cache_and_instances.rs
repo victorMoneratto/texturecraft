@@ -334,6 +334,7 @@ fn stroke(target: LayerId) -> StrokePreview {
         stencil: None,
         carried: BTreeMap::new(),
         carried_mask: None,
+        coverage: BTreeMap::new(),
     }
 }
 

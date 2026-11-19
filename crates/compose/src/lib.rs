@@ -23,6 +23,7 @@ pub mod pattern;
 mod pattern_context;
 pub mod solo;
 pub mod store;
+mod stroke_coverage;
 pub mod thumb;
 mod tile_pattern;
 mod tile_random_stream;

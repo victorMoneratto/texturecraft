@@ -96,6 +96,8 @@ pub struct StrokePreview {
     pub carried: BTreeMap<Channel, TileImage>,
     /// Mask coverage sampled by a mask pickup.
     pub carried_mask: Option<TileImage>,
+    /// Channels with stroke coverage of their own (1 component), read in place of `alpha`.
+    pub coverage: BTreeMap<Channel, TileImage>,
 }
 
 /// Everything the evaluator reads.
@@ -1923,7 +1925,7 @@ impl<'a, 'b> Texel<'a, 'b> {
     /// coverage per texel), with the live stroke when `preview`.
     fn painted(&mut self, data: Option<&[u16]>, c: &ChanPlan, preview: bool) -> ([f32; 3], f32) {
         let pv = if preview { self.inp.preview } else { None };
-        let mut sa = pv.map(|p| (self.stroke * p.opacity).clamp(0.0, 1.0)).unwrap_or(0.0);
+        let mut sa = pv.map(|p| (p.channel_stroke(c.ch, self.x, self.y).unwrap_or(self.stroke) * p.opacity).clamp(0.0, 1.0)).unwrap_or(0.0);
         // Projection: the stencil's alpha shapes the stroke and its color is the base color.
         let stencil = match pv.and_then(|p| p.stencil.as_ref()) {
             Some(st) if sa > 0.0 => {
@@ -3020,6 +3022,7 @@ mod tests {
             stencil: None,
             carried: BTreeMap::new(),
             carried_mask: None,
+            coverage: BTreeMap::new(),
         };
         let out = run(&f, Some(&pv));
         assert!(close(out.value(Channel::BaseColor, 4, 3), [0.0, 0.0, 1.0]));
