@@ -20,7 +20,7 @@ mod tests {
     fn the_blank_image_fills_the_aux_texture_and_stays_bounded() {
         let small = mask_view_blank_rgba((128, 64));
         assert_eq!(small.len(), 128 * 128 * 4);
-        assert!(small.chunks_exact(4).all(|texel| texel == MASK_VIEW_BLANK));
+        assert!(small.as_chunks::<4>().0.iter().all(|texel| *texel == MASK_VIEW_BLANK));
 
         // A hostile size is capped like every aux image
         assert_eq!(mask_view_blank_rgba((u32::MAX, 7)).len(), 2048 * 2048 * 4);

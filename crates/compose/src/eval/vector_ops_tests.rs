@@ -325,7 +325,7 @@ fn blue_stays_empty_whatever_a_source_or_a_stored_texel_holds() {
         let flow_tiles: Vec<&FlatTile> = flat.iter().filter(|(channel, ..)| *channel == Channel::Flow).collect();
         assert!(!flow_tiles.is_empty(), "{name}: flattening keeps the channel");
         for (_, _, data) in flow_tiles {
-            assert!(data.chunks_exact(4).all(|texel| texel[2] == 0), "{name}: flattened blue");
+            assert!(data.as_chunks::<4>().0.iter().all(|texel| texel[2] == 0), "{name}: flattened blue");
         }
     }
 
