@@ -550,6 +550,15 @@ fn histogram(s: &mut Session, p: &Value) -> Result<Value> {
         Some(c) => c,
         None => l.channels.keys().next().copied().unwrap_or(Channel::BaseColor),
     };
+
+    // Levels pass a vector through, so there are no levels to count: an empty histogram would read as an empty layer
+    if content && channel.kind() == texturecraft_core::ChannelKind::Vector {
+        return Err(bad(
+            CMD,
+            format!("the {} channel holds directions, which levels leave as they are: it has no histogram (name another channel)", channel.id()),
+        ));
+    }
+
     let bins = u64p(p, "bins").unwrap_or(64).clamp(2, 256) as usize;
     let counts = s.effect_histogram(eid, channel, bins).ok_or_else(|| bad(CMD, "the texture set is not ready"))?;
     Ok(if content { json!({"target": "content", "channel": channel.id(), "bins": counts}) } else { json!({"target": "mask", "bins": counts}) })

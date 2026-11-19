@@ -276,3 +276,22 @@ fn the_tool_state_and_inspect_report_the_material_and_the_flow_settings() {
     material(&mut session, json!({"material": "steel"}));
     assert_eq!(inspected_tool(&mut session)["material"]["material"], json!("steel"));
 }
+
+#[test]
+fn a_histogram_of_the_flow_map_is_refused_by_name() {
+    let mut session = flow_session();
+    let effect = execute(&mut session, "effect.add.levels", &json!({"target": "content"})).unwrap()["effect"].as_u64().unwrap();
+
+    // Levels pass the flow map through, so it has no levels to show
+    let error = execute(&mut session, "effect.histogram", &json!({"effect": effect, "channel": "flow"})).unwrap_err().to_string();
+    assert!(error.contains("flow") && error.contains("levels"), "{error}");
+
+    let roughness = execute(&mut session, "effect.histogram", &json!({"effect": effect, "channel": "roughness"})).unwrap();
+    assert_eq!(roughness["channel"], json!("roughness"));
+
+    // A layer that paints the flow map alone has nothing levels could remap either
+    let layer = session.selected_layer().unwrap();
+    session.doc.project.layer_mut(layer).unwrap().channels.retain(|channel, _| *channel == Channel::Flow);
+    let error = execute(&mut session, "effect.histogram", &json!({"effect": effect})).unwrap_err().to_string();
+    assert!(error.contains("flow"), "{error}");
+}
