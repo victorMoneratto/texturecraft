@@ -321,6 +321,18 @@ fn tool_state_json(session: &Session) -> Value {
     state
 }
 
+/// The brush's material as inspect reports it: the simple material it paints the pattern of,
+/// its channels that are on with the value each paints, and the mask gray
+pub(crate) fn material_json(tool: &crate::session::ToolState) -> Value {
+    let painted = tool.enabled.iter().filter_map(|channel| tool.values.get(channel).map(|value| (channel.id().to_string(), json!(value))));
+    json!({
+        "material": tool.material,
+        "enabled": tool.enabled.iter().map(|channel| channel.id()).collect::<Vec<_>>(),
+        "values": painted.collect::<serde_json::Map<_, _>>(),
+        "maskValue": tool.mask_value,
+    })
+}
+
 fn material(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "tool.material";
 

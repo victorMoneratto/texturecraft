@@ -242,3 +242,37 @@ fn a_direction_keeps_the_brush_material() {
     // A value of the material's own channels still makes the brush a plain one
     assert_eq!(material(&mut session, json!({"channel": "roughness", "value": 0.2}))["material"], Value::Null);
 }
+
+#[test]
+fn the_tool_state_and_inspect_report_the_material_and_the_flow_settings() {
+    let mut session = flow_session();
+    const SPEED: f32 = 0.6;
+    material(&mut session, json!({"channel": "flow", "angle": 0.0, "speed": SPEED, "solo": true}));
+    let east = (tool_state(&mut session), inspected_tool(&mut session));
+
+    material(&mut session, json!({"channel": "flow", "angle": 90.0}));
+    let north = (tool_state(&mut session), inspected_tool(&mut session));
+
+    // Both reports tell the two brushes apart, by the direction and by the packed value
+    for (report, angle) in [(&east.0, 0.0f32), (&east.1, 0.0), (&north.0, 90.0), (&north.1, 90.0)] {
+        assert_eq!(report["flow"], json!({"follow": false, "angle": angle, "speed": SPEED, "value": flow_from_polar(angle, SPEED)}), "{report}");
+    }
+    assert_ne!(east.1, north.1, "inspect shows the edit");
+
+    // Inspect lists the channels the brush paints with their values, and only those
+    assert_eq!(north.1["material"]["enabled"], json!(["flow"]));
+    assert_eq!(north.1["material"]["values"], json!({"flow": flow_from_polar(90.0, SPEED)}));
+
+    material(&mut session, json!({"channel": "roughness", "value": 0.25}));
+    material(&mut session, json!({"channel": "flow", "follow": true}));
+    material(&mut session, json!({"maskValue": 0.5}));
+    let report = inspected_tool(&mut session);
+    assert_eq!(report["material"]["enabled"], json!(["roughness", "flow"]));
+    assert_eq!(report["material"]["values"]["roughness"], json!([0.25, 0.25, 0.25]));
+    assert_eq!(report["material"]["maskValue"], json!(0.5));
+    assert_eq!(report["material"]["material"], Value::Null);
+    assert_eq!(report["flow"]["follow"], json!(true));
+
+    material(&mut session, json!({"material": "steel"}));
+    assert_eq!(inspected_tool(&mut session)["material"]["material"], json!("steel"));
+}
