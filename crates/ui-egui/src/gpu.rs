@@ -22,6 +22,8 @@ pub enum AuxView {
     Mask(texturecraft_engine::core::LayerId),
     /// The quick mask being edited, over the base color.
     QuickMask,
+    /// The composited flow map in the colours it exports (no display texture holds it)
+    Flow,
 }
 
 /// A texture set's texels across and down, and its mesh material.
@@ -41,6 +43,8 @@ pub struct SceneSync {
     pub env: Option<(String, Option<Arc<ImageRes>>)>,
     pub tiles: Vec<(usize, DisplayKind, u32, u32, Vec<u8>)>,
     pub aux: Vec<(usize, u32, Vec<u8>)>,
+    /// Parts of aux textures that changed, by texture set: applied after `aux`
+    pub aux_regions: Vec<(usize, texturecraft_render::AuxRegion)>,
     /// Bake mode's high poly (`None` removes it) and the id it is sent under
     pub bake_high: Option<(Option<Arc<Mesh>>, u64)>,
     /// Which vertices of the high poly (by its id) the bake's rays miss (1) or reach (0)
@@ -233,6 +237,9 @@ impl GpuLink {
             }
         }
 
+        // The flow view follows the tiles that reach the display textures
+        let flow_shown = aux_map == Some(AuxView::Flow);
+        let mut flow_tiles = Vec::new();
         for texture_set in 0..session.caches.len() {
             let tiles = session.take_uploads(texture_set);
             if tiles.is_empty() {
@@ -268,6 +275,12 @@ impl GpuLink {
             if let (Some(rest), Some(cache)) = (tiles.get(done..), session.caches.get_mut(texture_set)) {
                 cache.upload.extend(rest.iter().copied());
             }
+            if flow_shown && let Some(sent) = tiles.get(..done) {
+                flow_tiles.push((texture_set, sent.to_vec()));
+            }
+        }
+        if !flow_shown {
+            crate::flow_aux::leave(&mut self.aux);
         }
 
         match aux_map {
@@ -335,6 +348,7 @@ impl GpuLink {
                     self.aux.insert(texture_set, key);
                 }
             }
+            Some(AuxView::Flow) => crate::flow_aux::sync(&mut self.aux, session, &flow_tiles, &mut out),
             None => {}
         }
 
@@ -417,6 +431,9 @@ impl CallbackTrait for ViewCallback {
             for (texture_set, size, bytes) in &sync.aux {
                 gpu.renderer.upload_aux(device, queue, *texture_set, *size, bytes);
             }
+            for (texture_set, region) in &sync.aux_regions {
+                gpu.renderer.upload_aux_region(device, queue, *texture_set, region);
+            }
             if let Some((high, id)) = &sync.bake_high
                 && let Err(error) = gpu.renderer.set_bake_high(device, queue, high.as_deref(), *id)
             {
@@ -484,13 +501,16 @@ impl CallbackTrait for ViewCallback {
 }
 
 #[cfg(test)]
+mod flow_view_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
     use texturecraft_engine::execute;
     use texturecraft_engine::geom::primitives;
 
-    fn link() -> GpuLink {
+    pub(super) fn link() -> GpuLink {
         GpuLink {
             reset: Arc::default(),
             recreated: Arc::default(),

@@ -7,7 +7,7 @@ use egui::emath::GuiRounding as _;
 use egui::{Color32, PointerButton, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 use texturecraft_engine::camera_cmds::DEFAULT_CAMERA;
-use texturecraft_engine::core::BakedMap;
+use texturecraft_engine::core::{BakedMap, Channel};
 use texturecraft_engine::geom::glam::{Vec2, Vec3};
 use texturecraft_engine::{Session, Tool, ViewMode};
 use texturecraft_render::{Frame, SetHighlight, Shade, ViewKind};
@@ -97,14 +97,7 @@ pub fn central(app: &mut TextureCraftApp, ui: &mut Ui) {
     finish_unavailable_tool_gestures(app, pending_2d_endpoint);
     crate::id_color_pick::IdColorPick::end_when_stale(app);
     let tokens = Tokens::get(ui.ctx());
-    let aux_view = match app.session.view {
-        _ if quick_mask_shown(app) => Some(crate::gpu::AuxView::QuickMask),
-        ViewMode::MeshMap(map) => Some(crate::gpu::AuxView::MeshMap(map)),
-        ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
-        _ if mode == crate::state::Mode::Baking && app.ui.bake_visualization.bent_normal_shown() => Some(crate::gpu::AuxView::MeshMap(BakedMap::BentNormal)),
-        _ => None,
-    };
-    let mut sync = PendingSync(Some(aux_view));
+    let mut sync = PendingSync(Some(aux_view(app, mode)));
     let full = ui.available_rect_before_wrap();
     path_keys(app, ui);
 
@@ -306,7 +299,19 @@ fn split_divider_grab(ui: &Ui, full: Rect, divider_x: f32) {
     ui.interact(zone, split_divider_id(ui), Sense::drag()).on_hover_and_drag_cursor(egui::CursorIcon::ResizeHorizontal);
 }
 
-/// The shader's view modes (`Shade::view_mode`): the material, one channel, the aux texture (mesh map, mask or quick mask), the UV checker
+/// What the aux texture must hold for the view shown in `mode`: the quick mask being edited comes before the chosen view mode
+fn aux_view(app: &TextureCraftApp, mode: crate::state::Mode) -> Option<crate::gpu::AuxView> {
+    match app.session.view {
+        _ if quick_mask_shown(app) => Some(crate::gpu::AuxView::QuickMask),
+        ViewMode::MeshMap(map) => Some(crate::gpu::AuxView::MeshMap(map)),
+        ViewMode::Mask(id) => Some(crate::gpu::AuxView::Mask(id)),
+        ViewMode::Channel(Channel::Flow) => Some(crate::gpu::AuxView::Flow),
+        _ if mode == crate::state::Mode::Baking && app.ui.bake_visualization.bent_normal_shown() => Some(crate::gpu::AuxView::MeshMap(BakedMap::BentNormal)),
+        _ => None,
+    }
+}
+
+/// The shader's view modes (`Shade::view_mode`): the material, one channel, the aux texture (mesh map, mask, quick mask or flow map), the UV checker
 const VIEW_MODE_MATERIAL: u32 = 0;
 const VIEW_MODE_CHANNEL: u32 = 1;
 const VIEW_MODE_AUX_TEXTURE: u32 = 2;
@@ -316,6 +321,9 @@ fn shade(app: &TextureCraftApp) -> Shade {
     let (view_mode, channel) = match app.session.view {
         _ if quick_mask_shown(app) => (VIEW_MODE_AUX_TEXTURE, 0),
         ViewMode::Material => (VIEW_MODE_MATERIAL, 0),
+
+        // No display texture holds the flow map: its raw view reads the aux texture
+        ViewMode::Channel(Channel::Flow) => (VIEW_MODE_AUX_TEXTURE, 0),
         ViewMode::Channel(selected_channel) => (VIEW_MODE_CHANNEL, selected_channel.index() as u32),
         ViewMode::MeshMap(_) | ViewMode::Mask(_) => (VIEW_MODE_AUX_TEXTURE, 0),
         ViewMode::UvChecker => (VIEW_MODE_UV_CHECKER, 0),
@@ -2495,6 +2503,9 @@ fn bake_paint_overlay(app: &TextureCraftApp, ui: &Ui, painter: &egui::Painter, t
     };
     painter.image(tex.id(), Rect::from_two_pos(top_left, bottom_right), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
+
+#[cfg(test)]
+mod flow_view_tests;
 
 #[cfg(test)]
 mod tests {
