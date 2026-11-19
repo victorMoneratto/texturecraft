@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::flow_code::{FLOW_STILL_PACKED, flow_pack, flow_unpack};
+
 /// A material channel. Order is the display order in the UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Channel {
@@ -44,8 +46,8 @@ pub enum Channel {
     Flow,
 }
 
-/// A flow map texel with no flow: a zero vector, packed.
-pub const FLOW_STILL: [f32; 3] = [0.5, 0.5, 0.0];
+/// A flow map texel with no flow: a zero vector, packed (see [`crate::flow_code`]).
+pub const FLOW_STILL: [f32; 3] = [FLOW_STILL_PACKED, FLOW_STILL_PACKED, 0.0];
 
 /// The packed flow map value of a flow at `angle_degrees` and `speed` (0..1). The angle turns
 /// counter-clockwise as the texture is seen, from 0 pointing right: 90 points up the image,
@@ -57,13 +59,13 @@ pub fn flow_from_polar(angle_degrees: f32, speed: f32) -> [f32; 3] {
 
     let (sin, cos) = angle_degrees.to_radians().sin_cos();
     let speed = speed.clamp(0.0, 1.0);
-    [0.5 + 0.5 * cos * speed, 0.5 - 0.5 * sin * speed, 0.0]
+    [flow_pack(cos * speed), flow_pack(-sin * speed), 0.0]
 }
 
 /// The angle (0..360 degrees, see [`flow_from_polar`]) and speed (0..1) of a packed flow map
 /// value. A still texel has no direction and reads as angle 0.
 pub fn flow_to_polar(value: [f32; 3]) -> (f32, f32) {
-    let (x, y) = (value[0] * 2.0 - 1.0, value[1] * 2.0 - 1.0);
+    let (x, y) = (flow_unpack(value[0]), flow_unpack(value[1]));
     let speed = x.hypot(y);
     if !speed.is_finite() || speed < FLOW_MIN_SPEED {
         return (0.0, 0.0);
@@ -71,11 +73,18 @@ pub fn flow_to_polar(value: [f32; 3]) -> (f32, f32) {
 
     // A flow straight to the right has y at negative zero: an editor would show its angle as -0
     let angle_degrees = (-y).atan2(x).to_degrees().rem_euclid(360.0);
+    let speed = (speed * FLOW_SPEED_STEPS).round() / FLOW_SPEED_STEPS;
     (if angle_degrees == 0.0 { 0.0 } else { angle_degrees }, speed.min(1.0))
 }
 
 /// Below this length a flow vector has no usable direction (16-bit storage keeps about 1/32768)
 const FLOW_MIN_SPEED: f32 = 1e-4;
+
+/// A speed is read back to the nearest of this many steps per unit. Storing a vector moves
+/// each component by up to half a level (1/65534) and its length by less than half a step, so
+/// a speed authored on a step reads back as authored and editing the angle alone does not
+/// creep the speed
+const FLOW_SPEED_STEPS: f32 = 10_000.0;
 
 /// How a channel's values are stored and interpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -368,17 +377,28 @@ mod tests {
 
     #[test]
     fn flow_angles_turn_counter_clockwise_on_the_image_and_round_trip() {
-        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6);
+        let still = FLOW_STILL_PACKED;
 
         // Right is +U; up the image is towards smaller V
-        assert!(close(flow_from_polar(0.0, 1.0), [1.0, 0.5, 0.0]));
-        assert!(close(flow_from_polar(90.0, 1.0), [0.5, 0.0, 0.0]));
-        assert!(close(flow_from_polar(180.0, 0.5), [0.25, 0.5, 0.0]));
-        assert!(close(flow_from_polar(45.0, 0.0), FLOW_STILL));
+        assert_eq!(flow_from_polar(0.0, 1.0), [flow_pack(1.0), still, 0.0]);
+        assert_eq!(flow_from_polar(90.0, 1.0), [still, flow_pack(-1.0), 0.0]);
+        assert_eq!(flow_from_polar(180.0, 0.5), [flow_pack(-0.5), still, 0.0]);
+        assert_eq!(flow_from_polar(45.0, 0.0), FLOW_STILL);
 
+        // Packed, a full flow spans the whole stored range but its lowest level
+        assert_eq!((flow_pack(1.0), flow_pack(-1.0)), (1.0, 1.0 / 65535.0));
+
+        // A direction is kept to within what one stored level turns it at that speed
         for (angle, speed) in [(0.0, 1.0), (37.0, 0.25), (135.0, 0.8), (270.0, 0.6), (359.0, 1.0)] {
             let (a, s) = flow_to_polar(flow_from_polar(angle, speed));
-            assert!((a - angle).abs() < 1e-3 && (s - speed).abs() < 1e-5, "{angle} {speed} -> {a} {s}");
+            assert!((a - angle).abs() < 0.01 && s == speed, "{angle} {speed} -> {a} {s}");
+        }
+
+        // Editing the angle alone, again and again, never creeps the speed
+        let mut value = flow_from_polar(10.0, 0.3333);
+        for turn in 0..360 {
+            value = flow_from_polar(turn as f32 * 7.0, flow_to_polar(value).1);
+            assert_eq!(flow_to_polar(value).1, 0.3333, "after {turn} turns");
         }
         assert_eq!(flow_to_polar(FLOW_STILL), (0.0, 0.0));
 
@@ -387,7 +407,7 @@ mod tests {
         assert_eq!(format!("{:.0}", flow_to_polar(flow_from_polar(0.0, 0.5)).0), "0");
 
         // Speed is clamped and hostile numbers paint nothing
-        assert!(close(flow_from_polar(0.0, 7.0), [1.0, 0.5, 0.0]));
+        assert_eq!(flow_from_polar(0.0, 7.0), flow_from_polar(0.0, 1.0));
         assert_eq!(flow_from_polar(f32::NAN, 1.0), FLOW_STILL);
         assert_eq!(flow_from_polar(0.0, f32::INFINITY), FLOW_STILL);
     }

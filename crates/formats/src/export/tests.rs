@@ -863,7 +863,7 @@ fn flow_fx(x: f32, y: f32) -> Fx {
     let mut channels = default_channels();
     channels.push(Channel::Flow);
     let mut fx = Fx::new(&channels);
-    fx.set_all(Channel::Flow, |_, _| [x * 0.5 + 0.5, y * 0.5 + 0.5, 0.0]);
+    fx.set_all(Channel::Flow, |_, _| [texturecraft_core::flow_pack(x), texturecraft_core::flow_pack(y), 0.0]);
     fx
 }
 
@@ -969,6 +969,83 @@ fn an_8_bit_flow_file_holds_the_levels_the_raw_view_shows() {
         for (x, y) in (0..RES).flat_map(|y| (0..RES).map(move |x| (x, y))) {
             let shown = [texturecraft_compose::flow_view_byte(level(x, y)), texturecraft_compose::flow_view_byte(u16::MAX - level(x, y)), 0];
             assert_eq!(image.get_pixel(x, y).0, shown, "stored level {}", level(x, y));
+        }
+    }
+}
+
+/// One flow map file of a kind (8-bit PNG, 16-bit PNG or 32-bit float EXR), with `padding`
+fn flow_kind_options(bit_depth: u8, flip_green: bool, padding: Padding) -> ExportOptions {
+    let mut options = flow_options(bit_depth, flip_green);
+    options.padding = padding;
+    if bit_depth == 32 {
+        options.format_override = Some(FileFormat::Exr);
+    }
+    options
+}
+
+/// Red and green of every texel of a flow map file as numbers comparable across the kinds
+fn flow_file_texels(file: &ExportedFile, bit_depth: u8) -> Vec<[f64; 3]> {
+    let image = decode(file);
+    match bit_depth {
+        8 => image.to_rgb8().pixels().map(|texel| texel.0.map(f64::from)).collect(),
+        16 => image.to_rgb16().pixels().map(|texel| texel.0.map(f64::from)).collect(),
+        _ => image.to_rgb32f().pixels().map(|texel| texel.0.map(f64::from)).collect(),
+    }
+}
+
+/// Still water in a file of `bit_depth`: red, green and the empty blue
+fn still_in_file(bit_depth: u8) -> [f64; 3] {
+    match bit_depth {
+        8 => [128.0, 128.0, 0.0],
+        16 => [32768.0, 32768.0, 0.0],
+        _ => [0.5, 0.5, 0.0],
+    }
+}
+
+/// A square hole in the UV coverage, wide enough that its middle is beyond a small dilation
+const HOLE: std::ops::Range<u32> = 20..40;
+const SMALL_DILATION: u32 = 3;
+
+#[test]
+fn still_water_stays_exactly_still_outside_the_uv_islands_in_every_file_kind() {
+    let mut fx = flow_fx(0.0, 0.0);
+    for (x, y) in HOLE.flat_map(|y| HOLE.map(move |x| (x, y))) {
+        fx.coverage[(y * RES + x) as usize] = false;
+    }
+
+    // Uncovered, dilated from a still neighbour, and beyond the dilation: zero or the default
+    for padding in [Padding::None, Padding::Dilation(SMALL_DILATION), Padding::DilationDefault(SMALL_DILATION), Padding::Infinite] {
+        for bit_depth in [8, 16, 32] {
+            for flip_green in [false, true] {
+                let texels = flow_file_texels(&fx.render(&flow_kind_options(bit_depth, flip_green, padding))[0], bit_depth);
+
+                let moving = texels.iter().position(|texel| *texel != still_in_file(bit_depth));
+                assert_eq!(moving.map(|at| (at as u32 % RES, at as u32 / RES, texels[at])), None, "{padding:?}, {bit_depth} bit, flipped: {flip_green}");
+            }
+        }
+    }
+}
+
+#[test]
+fn padding_carries_the_flow_of_the_island_and_leaves_the_rest_still() {
+    let mut fx = flow_fx(1.0, -1.0);
+    for (x, y) in HOLE.flat_map(|y| HOLE.map(move |x| (x, y))) {
+        fx.coverage[(y * RES + x) as usize] = false;
+    }
+    let (edge, deep) = ((HOLE.start + 1, 30), (30, 30));
+
+    for bit_depth in [8, 16, 32] {
+        for flip_green in [false, true] {
+            let covered = flow_file_texels(&fx.render(&flow_kind_options(bit_depth, flip_green, Padding::None))[0], bit_depth)[0];
+            assert_ne!(covered, still_in_file(bit_depth));
+
+            for padding in [Padding::Dilation(SMALL_DILATION), Padding::DilationDefault(SMALL_DILATION)] {
+                let texels = flow_file_texels(&fx.render(&flow_kind_options(bit_depth, flip_green, padding))[0], bit_depth);
+                let at = |(x, y): (u32, u32)| texels[(y * RES + x) as usize];
+
+                assert_eq!(at(edge), covered, "{padding:?}, {bit_depth} bit, flipped: {flip_green}: a dilated texel flows like its island");
+                assert_eq!(at(deep), still_in_file(bit_depth), "{padding:?}, {bit_depth} bit, flipped: {flip_green}: beyond the dilation nothing moves");
+            }
         }
     }
 }

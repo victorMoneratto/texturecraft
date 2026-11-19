@@ -11,6 +11,7 @@ pub mod bake;
 pub mod blend;
 mod block_scales;
 pub mod channel;
+pub mod flow_code;
 pub mod layer;
 pub mod project;
 
@@ -23,6 +24,10 @@ pub use bake::{
 };
 pub use blend::{BlendMode, blend1, blend3, lum, mix3};
 pub use channel::{Channel, ChannelFormat, ChannelKind, FLOW_STILL, flow_from_polar, flow_to_polar};
+pub use flow_code::{
+    FLOW_REACH_LEVELS, FLOW_STILL_LEVEL, FLOW_STILL_PACKED, flow_level, flow_level_offset, flow_offset_in, flow_pack, flow_reversed, flow_stored_level,
+    flow_unpack, flow_unpack_level,
+};
 pub use layer::{
     ChannelBlend, CompareOp, CurvatureDetail, CurvatureMode, Decal, DecalFlip, DecalSymmetry, Effect, EffectKind, Fill, Filter, Generator, GeneratorGlobal,
     GeneratorKind, HeightMask, Layer, LayerId, LayerKind, Levels, LinkParam, LinkPreset, Mask, MaskBackground, MaterialLink, MicroDetail, OutputResolution,

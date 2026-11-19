@@ -17,8 +17,11 @@ use std::io::Cursor;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use texturecraft_compose::{BakedMaps, Composite};
-use texturecraft_core::{AoMixing, BakedMap, BlockScales, Channel, ChannelKind, NormalFormat, NormalMixing, Project, TextureSet};
+use texturecraft_compose::{BakedMaps, Composite, FLOW_VIEW_REACH, FLOW_VIEW_STILL_LEVEL};
+use texturecraft_core::{
+    AoMixing, BakedMap, BlockScales, Channel, ChannelKind, FLOW_REACH_LEVELS, FLOW_STILL_LEVEL, NormalFormat, NormalMixing, Project, TextureSet,
+    flow_offset_in, flow_stored_level,
+};
 use texturecraft_geom::glam::Vec3;
 use texturecraft_texel::{ColorSpace, DilationMap, linear_to_srgb};
 
@@ -759,8 +762,8 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
 
             // Flow vector components are written around one exact still level, flipped or not
             let vector: Vec<bool> = lay.iter().map(|(_, src)| is_vector_component(src)).collect();
-            let code = SignedCode::of_file(p.format, p.bit_depth);
-            let still = code.encode(0.5, false);
+            let code = FlowFileCode::of_file(p.format, p.bit_depth);
+            let still = code.still();
 
             // The texels written: one tile, or the whole set
             let (x0, y0, w, h) = match (p.tile, grid) {
@@ -797,12 +800,13 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
                     let mut cache = None;
                     for (k, (_, src)) in lay.iter().enumerate() {
                         if let Some(v) = row.get_mut(col * n + k) {
-                            let s = sampler.sample(src, at, &mut cache);
                             let flip = inverted.get(k).copied().unwrap_or(false);
-                            *v = match vector.get(k) {
-                                Some(true) => code.encode(s, flip),
-                                _ if flip => 1.0 - s,
-                                _ => s,
+                            *v = match (vector.get(k), at) {
+                                // The default is still water: written as the file's own still level
+                                (Some(true), At::Default) => still,
+                                (Some(true), At::Texel(..)) => code.encode(sampler.sample(src, at, &mut cache), flip),
+                                _ if flip => 1.0 - sampler.sample(src, at, &mut cache),
+                                _ => sampler.sample(src, at, &mut cache),
                             };
                         }
                     }
@@ -847,41 +851,48 @@ fn is_vector_component(src: &SourceRef) -> bool {
 /// A flow map keeps its vector in the first two components
 const VECTOR_COMPONENTS: u8 = 2;
 
-/// The highest level of the composite's 16-bit storage, and the level a packed 0.5 is stored as
-const STORED_TOP_LEVEL: f32 = 65535.0;
-const STORED_STILL_LEVEL: f32 = 32768.0;
-
-/// How a -1..1 vector component becomes a 0..1 texel value in a file.
+/// How a stored flow map component becomes a 0..1 texel value in a file.
 ///
 /// An integer file has an even number of levels, so no level sits at exactly one half: 0.5
 /// rounds to 128 of 255, and its inversion `1 - 0.5` to 127, which would make still water move
 /// once its green is flipped. The vector is written around the upper middle level instead
 /// (128 of 255, 32768 of 65535), reaching the same number of levels both ways, and a flip
-/// negates the vector before it is written. Still water is then one exact level in every
-/// export. A float file needs none of this.
-struct SignedCode {
-    centre: f32,
-    reach: f32,
+/// reverses the flow before it is written. A float file is written the same way on a grid fine
+/// enough that every value is exact in it, around one half. Still water is then one exact value
+/// in every export and opposite flows are mirrored about it, flipped or not.
+struct FlowFileCode {
+    /// The level of still water, how many levels a component reaches each way, and the level
+    /// that is 1.0 in the file
+    still: u32,
+    reach: u32,
+    top: u32,
 }
 
-impl SignedCode {
-    fn of_file(format: FileFormat, bit_depth: u8) -> SignedCode {
-        if format.is_float() {
-            return SignedCode { centre: 0.5, reach: 0.5 };
-        }
+/// Steps from 0 to 1 that a 32-bit and a 16-bit float keep exactly between one half and one
+const FLOAT_STEPS: u32 = 1 << 24;
+const HALF_FLOAT_STEPS: u32 = 1 << 11;
 
-        let top_level: f32 = if bit_depth == 16 { 65535.0 } else { 255.0 };
-        let middle_level = (top_level + 1.0) / 2.0;
-        SignedCode { centre: middle_level / top_level, reach: (top_level - middle_level) / top_level }
+impl FlowFileCode {
+    fn of_file(format: FileFormat, bit_depth: u8) -> FlowFileCode {
+        let around_one_half = |steps: u32| FlowFileCode { still: steps / 2, reach: steps / 2, top: steps };
+        match (format.is_float(), bit_depth) {
+            (true, 16) => around_one_half(HALF_FLOAT_STEPS),
+            (true, _) => around_one_half(FLOAT_STEPS),
+            (false, 16) => FlowFileCode { still: u32::from(FLOW_STILL_LEVEL), reach: u32::from(FLOW_REACH_LEVELS), top: u32::from(u16::MAX) },
+            (false, _) => FlowFileCode { still: u32::from(FLOW_VIEW_STILL_LEVEL), reach: u32::from(FLOW_VIEW_REACH), top: u32::from(u8::MAX) },
+        }
     }
 
-    /// The texel value of a packed component as the composite stores it, negated when `flip`.
+    /// The texel value of a component at rest.
+    fn still(&self) -> f32 {
+        self.still as f32 / self.top as f32
+    }
+
+    /// The texel value of a packed component as the composite stores it, its flow reversed when
+    /// `flip`.
     fn encode(&self, packed: f32, flip: bool) -> f32 {
-        // The composite's 16 bits have no exact half either: 0.5 is stored as its upper middle
-        // level, so the vector is read back around that level, not around 0.5
-        let stored_level = packed * STORED_TOP_LEVEL;
-        let component = if packed.is_finite() { ((stored_level - STORED_STILL_LEVEL) / (STORED_TOP_LEVEL - STORED_STILL_LEVEL)).clamp(-1.0, 1.0) } else { 0.0 };
-        self.centre + if flip { -component } else { component } * self.reach
+        let levels = flow_offset_in(flow_stored_level(packed), self.reach, flip);
+        self.still.saturating_add_signed(levels) as f32 / self.top as f32
     }
 }
 

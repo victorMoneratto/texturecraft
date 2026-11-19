@@ -17,6 +17,7 @@ mod flow_follow;
 mod flow_follow_perf;
 mod flow_follow_storage;
 mod flow_follow_tools;
+mod flow_code;
 mod flow_map;
 mod frame_selection;
 mod generator_inputs;
