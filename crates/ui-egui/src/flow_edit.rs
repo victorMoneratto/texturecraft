@@ -82,7 +82,7 @@ fn shown_angle(remembered: Option<f32>, stored_angle: f32, speed: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use texturecraft_engine::core::FLOW_STILL;
+    use texturecraft_engine::core::{FLOW_REACH_LEVELS, FLOW_STILL, FLOW_STILL_LEVEL, flow_stored_level};
 
     #[test]
     fn a_still_value_keeps_the_direction_last_shown() {
@@ -118,7 +118,11 @@ mod tests {
     fn the_change_packs_its_direction_and_speed() {
         let edit = FlowEdit { angle_degrees: 90.0, speed: 0.5, merge: false };
         let packed = edit.value();
-        assert!((packed[0] - 0.5).abs() < 1e-6 && (packed[1] - 0.25).abs() < 1e-6 && packed[2] == 0.0, "{packed:?}");
+
+        // Up the image at half speed: red at rest, green half the reach below it, blue empty
+        let half_reach = (FLOW_REACH_LEVELS + 1) / 2;
+        assert_eq!([flow_stored_level(packed[0]), flow_stored_level(packed[1])], [FLOW_STILL_LEVEL, FLOW_STILL_LEVEL - half_reach], "{packed:?}");
+        assert_eq!(packed[2], 0.0);
 
         // No speed is still water whatever the direction: the direction lives in the editor only
         assert_eq!(FlowEdit { angle_degrees: 200.0, speed: 0.0, merge: false }.value(), FLOW_STILL);
