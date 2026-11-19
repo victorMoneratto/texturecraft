@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use texturecraft_core::Channel;
+use texturecraft_core::{Channel, flow_unpack_level};
 use texturecraft_geom::glam::{Vec2, Vec3};
 use texturecraft_geom::{Bvh, Mesh, UvGBuffer};
 use texturecraft_paint::{BrushAlpha, FlowProducer, RasterCtx, Shape, Stamp, StrokeCanvas, Travel, fill_triangles, rasterize};
@@ -85,7 +85,7 @@ fn stored(canvas: &StrokeCanvas, u: f32, v: f32) -> Option<Vec2> {
     let (x, y) = ((u * SIZE as f32) as u32, (v * SIZE as f32) as u32);
     let covered = producer.coverage.get(x, y)[0] > 0;
     let value = producer.values[&Channel::Flow].get(x, y);
-    covered.then(|| Vec2::new(from_u16(value[0]) * 2.0 - 1.0, from_u16(value[1]) * 2.0 - 1.0))
+    covered.then(|| Vec2::new(flow_unpack_level(value[0]), flow_unpack_level(value[1])))
 }
 
 fn stroke_alpha(canvas: &StrokeCanvas, u: f32, v: f32) -> f32 {

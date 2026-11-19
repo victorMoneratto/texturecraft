@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use texturecraft_core::Channel;
+use texturecraft_core::{Channel, flow_level};
 use texturecraft_texel::{TILE, TileImage, to_u16};
 
 mod flow_texel;
@@ -32,9 +32,10 @@ pub struct FlowProducer {
     pub coverage: TileImage,
 }
 
-/// The flow map value that stores `vector` (each component -1..1, x along +U, y along +V)
+/// The levels that store `vector` (each component -1..1, x along +U, y along +V): the one
+/// packing every flow map value goes through, so mirrored strokes store mirrored levels
 fn packed(vector: [f32; 2]) -> [u16; 3] {
-    [to_u16(0.5 + 0.5 * vector[0]), to_u16(0.5 + 0.5 * vector[1]), 0]
+    [flow_level(vector[0]), flow_level(vector[1]), 0]
 }
 
 impl FlowProducer {
@@ -113,6 +114,7 @@ impl FlowProducer {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use texturecraft_core::{FLOW_STILL_LEVEL, flow_unpack_level};
     use texturecraft_texel::from_u16;
 
     use super::*;
@@ -125,7 +127,31 @@ mod tests {
     /// The stored vector and coverage of a texel
     fn read(producer: &FlowProducer, x: u32, y: u32) -> ([f32; 2], f32) {
         let value = producer.values[&Channel::Flow].get(x, y);
-        ([from_u16(value[0]) * 2.0 - 1.0, from_u16(value[1]) * 2.0 - 1.0], from_u16(producer.coverage.get(x, y)[0]))
+        ([flow_unpack_level(value[0]), flow_unpack_level(value[1])], from_u16(producer.coverage.get(x, y)[0]))
+    }
+
+    #[test]
+    fn opposite_directions_are_stored_the_same_number_of_levels_from_still() {
+        // Half speed is the tie of the code: 0.5 × 32767 is 16383.5
+        for speed in [1.0, 0.5, 0.3333, 0.001] {
+            let mut producer = FlowProducer::new(SIZE, SIZE, speed, 0.1);
+            producer.deposit(&[(1, 1, 1.0)], &[[1.0, 0.0]], 0);
+            producer.deposit(&[(2, 1, 1.0)], &[[-1.0, 0.0]], 0);
+            producer.deposit(&[(3, 1, 1.0)], &[[0.0, 1.0]], 0);
+            producer.deposit(&[(4, 1, 1.0)], &[[0.0, -1.0]], 0);
+
+            let levels = |x: u32| producer.values[&Channel::Flow].get(x, 1).to_vec();
+            let from_still = |level: u16| i32::from(level) - i32::from(FLOW_STILL_LEVEL);
+            let (right, left, down, up) = (levels(1), levels(2), levels(3), levels(4));
+            assert_eq!(from_still(right[0]), -from_still(left[0]), "speed {speed}");
+            assert_eq!(from_still(down[1]), -from_still(up[1]), "speed {speed}");
+            assert_eq!(from_still(right[0]), from_still(down[1]), "speed {speed}");
+            assert!(from_still(right[0]) > 0, "speed {speed}");
+
+            // The axis a stroke does not move along is exactly still, and blue is empty
+            assert_eq!([right[1], left[1], down[0], up[0]], [FLOW_STILL_LEVEL; 4], "speed {speed}");
+            assert_eq!([right[2], left[2], down[2], up[2]], [0; 4]);
+        }
     }
 
     fn close(actual: [f32; 2], expected: [f32; 2]) -> bool {
