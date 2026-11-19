@@ -255,6 +255,7 @@ pub struct MapSpec {
     pub channels: Vec<(Dest, SourceRef)>,
     /// Destination channels written as `1 - value` (absent in old files: none). The source value
     /// is inverted before the colour-space encoding, so a colour map is inverted in linear light.
+    /// A flow map component is negated instead, which keeps still water on the same level.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inverted: Vec<Dest>,
 }
@@ -315,9 +316,9 @@ impl ExportPreset {
 /// UV padding of exported maps (texels outside the UV islands).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Padding {
-    /// Uncovered texels are zero (transparent where there is alpha).
+    /// Uncovered texels are zero (transparent where there is alpha; still water in a flow map).
     None,
-    /// Islands are dilated this many texels; beyond, texels are zero.
+    /// Islands are dilated this many texels; beyond, texels are zero (still water in a flow map).
     Dilation(u32),
     /// Islands are dilated this many texels; beyond, texels hold the channel default.
     DilationDefault(u32),
@@ -756,6 +757,11 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             let n = lay.len();
             let inverted: Vec<bool> = lay.iter().map(|(d, _)| map.inverted.contains(d)).collect();
 
+            // Flow vector components are written around one exact still level, flipped or not
+            let vector: Vec<bool> = lay.iter().map(|(_, src)| is_vector_component(src)).collect();
+            let code = SignedCode::of_file(p.format, p.bit_depth);
+            let still = code.encode(0.5, false);
+
             // The texels written: one tile, or the whole set
             let (x0, y0, w, h) = match (p.tile, grid) {
                 (Some(t), Some(g)) => {
@@ -779,12 +785,25 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
                             None => beyond_default.then_some(At::Default),
                         }
                     };
-                    let Some(at) = at else { continue };
+                    let Some(at) = at else {
+                        // Left black, a texel outside the UV islands would read as full flow
+                        for (k, _) in vector.iter().enumerate().filter(|(_, is_vector)| **is_vector) {
+                            if let Some(v) = row.get_mut(col * n + k) {
+                                *v = still;
+                            }
+                        }
+                        continue;
+                    };
                     let mut cache = None;
                     for (k, (_, src)) in lay.iter().enumerate() {
                         if let Some(v) = row.get_mut(col * n + k) {
                             let s = sampler.sample(src, at, &mut cache);
-                            *v = if inverted.get(k).copied().unwrap_or(false) { 1.0 - s } else { s };
+                            let flip = inverted.get(k).copied().unwrap_or(false);
+                            *v = match vector.get(k) {
+                                Some(true) => code.encode(s, flip),
+                                _ if flip => 1.0 - s,
+                                _ => s,
+                            };
                         }
                     }
                 }
@@ -818,6 +837,52 @@ pub fn render_maps(input: &ExportInput, opts: &ExportOptions) -> Result<Vec<Expo
             Ok(ExportedFile { name: p.name, bytes, width: size.0, height: size.1, warnings })
         })
         .collect()
+}
+
+/// Whether `src` is one of the two components of a flow map's vector.
+fn is_vector_component(src: &SourceRef) -> bool {
+    matches!(src, SourceRef::Channel { channel, component } if channel.kind() == ChannelKind::Vector && *component < VECTOR_COMPONENTS)
+}
+
+/// A flow map keeps its vector in the first two components
+const VECTOR_COMPONENTS: u8 = 2;
+
+/// The highest level of the composite's 16-bit storage, and the level a packed 0.5 is stored as
+const STORED_TOP_LEVEL: f32 = 65535.0;
+const STORED_STILL_LEVEL: f32 = 32768.0;
+
+/// How a -1..1 vector component becomes a 0..1 texel value in a file.
+///
+/// An integer file has an even number of levels, so no level sits at exactly one half: 0.5
+/// rounds to 128 of 255, and its inversion `1 - 0.5` to 127, which would make still water move
+/// once its green is flipped. The vector is written around the upper middle level instead
+/// (128 of 255, 32768 of 65535), reaching the same number of levels both ways, and a flip
+/// negates the vector before it is written. Still water is then one exact level in every
+/// export. A float file needs none of this.
+struct SignedCode {
+    centre: f32,
+    reach: f32,
+}
+
+impl SignedCode {
+    fn of_file(format: FileFormat, bit_depth: u8) -> SignedCode {
+        if format.is_float() {
+            return SignedCode { centre: 0.5, reach: 0.5 };
+        }
+
+        let top_level: f32 = if bit_depth == 16 { 65535.0 } else { 255.0 };
+        let middle_level = (top_level + 1.0) / 2.0;
+        SignedCode { centre: middle_level / top_level, reach: (top_level - middle_level) / top_level }
+    }
+
+    /// The texel value of a packed component as the composite stores it, negated when `flip`.
+    fn encode(&self, packed: f32, flip: bool) -> f32 {
+        // The composite's 16 bits have no exact half either: 0.5 is stored as its upper middle
+        // level, so the vector is read back around that level, not around 0.5
+        let stored_level = packed * STORED_TOP_LEVEL;
+        let component = if packed.is_finite() { ((stored_level - STORED_STILL_LEVEL) / (STORED_TOP_LEVEL - STORED_STILL_LEVEL)).clamp(-1.0, 1.0) } else { 0.0 };
+        self.centre + if flip { -component } else { component } * self.reach
+    }
 }
 
 /// Resample a `from` (width, height) image of `n` components to `to` (same aspect): box filter

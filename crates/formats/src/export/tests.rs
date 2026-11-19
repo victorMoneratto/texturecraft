@@ -854,3 +854,99 @@ fn inverting_a_colour_channel_inverts_the_linear_value_before_encoding() {
     assert_eq!(half.width(), RES / 2);
     assert!(half.get_pixel(0, 5)[0] >= 250, "{}", half.get_pixel(0, 5)[0]);
 }
+
+/// Levels a flow component reaches each way from still water in an 8-bit file
+const FLOW_REACH_8: f32 = 127.0;
+
+/// A set with the flow map, flowing (`x`, `y`) everywhere (each -1..1)
+fn flow_fx(x: f32, y: f32) -> Fx {
+    let mut channels = default_channels();
+    channels.push(Channel::Flow);
+    let mut fx = Fx::new(&channels);
+    fx.set_all(Channel::Flow, |_, _| [x * 0.5 + 0.5, y * 0.5 + 0.5, 0.0]);
+    fx
+}
+
+/// One flow map file of `bit_depth`, with green flipped when `flip_green`
+fn flow_options(bit_depth: u8, flip_green: bool) -> ExportOptions {
+    let channels = vec![
+        (Dest::R, SourceRef::Channel { channel: Channel::Flow, component: 0 }),
+        (Dest::G, SourceRef::Channel { channel: Channel::Flow, component: 1 }),
+        (Dest::B, SourceRef::Constant(0.0)),
+    ];
+    let inverted = if flip_green { vec![Dest::G] } else { Vec::new() };
+    let map = MapSpec { file: "$textureSet_flow".into(), format: FileFormat::Png, bit_depth, channels, inverted };
+    ExportOptions::new(ExportPreset { name: "Flow".into(), maps: vec![map] })
+}
+
+#[test]
+fn the_flow_map_exports_its_vector_in_red_and_green_with_blue_empty() {
+    // Whole levels, so the expected bytes are not on a rounding edge
+    let fx = flow_fx(100.0 / FLOW_REACH_8, -50.0 / FLOW_REACH_8);
+
+    let files = fx.render_preset("Document channels + Normal + AO");
+    let flow = decode(find(&files, "_flow.png"));
+
+    assert_eq!(flow.color(), image::ColorType::Rgb8);
+    assert_eq!(flow.get_pixel(20, 30).0[..3], [228, 78, 0]);
+
+    // A set without the channel writes no flow file
+    let plain = Fx::new(&default_channels()).render_preset("Document channels + Normal + AO");
+    assert!(plain.iter().all(|file| !file.name.contains("_flow")));
+}
+
+#[test]
+fn still_water_is_one_exact_level_whether_green_is_flipped_or_not() {
+    let fx = flow_fx(0.0, 0.0);
+
+    for flip_green in [false, true] {
+        let eight = decode(&fx.render(&flow_options(8, flip_green))[0]).to_rgb8();
+        assert_eq!(eight.get_pixel(7, 7).0, [128, 128, 0], "8 bit, flipped: {flip_green}");
+
+        let sixteen = decode(&fx.render(&flow_options(16, flip_green))[0]).to_rgb16();
+        assert_eq!(sixteen.get_pixel(7, 7).0, [32768, 32768, 0], "16 bit, flipped: {flip_green}");
+    }
+}
+
+#[test]
+fn flipping_green_negates_the_flow_and_opposite_flows_are_symmetric() {
+    let (up, down) = (flow_fx(0.0, -50.0 / FLOW_REACH_8), flow_fx(0.0, 50.0 / FLOW_REACH_8));
+    let green = |fx: &Fx, flip: bool| decode(&fx.render(&flow_options(8, flip))[0]).to_rgb8().get_pixel(3, 3).0[1];
+
+    assert_eq!((green(&up, false), green(&down, false)), (78, 178), "the same distance each side of 128");
+    assert_eq!(green(&up, true), green(&down, false), "a flip is the opposite flow, level for level");
+    assert_eq!(green(&down, true), green(&up, false));
+
+    // Full speed uses the whole range it can reach both ways
+    let fastest = decode(&flow_fx(1.0, -1.0).render(&flow_options(8, false))[0]).to_rgb8();
+    assert_eq!(fastest.get_pixel(3, 3).0, [255, 1, 0]);
+}
+
+#[test]
+fn texels_outside_the_uv_islands_export_as_still_water() {
+    let mut fx = flow_fx(1.0, 1.0);
+    let outside = (5 * RES + 9) as usize;
+    fx.coverage[outside] = false;
+
+    // Without padding an uncovered texel is left at its start value: black would be full flow
+    for flip_green in [false, true] {
+        let mut options = flow_options(8, flip_green);
+        options.padding = Padding::None;
+        let image = decode(&fx.render(&options)[0]).to_rgb8();
+
+        assert_eq!(image.get_pixel(9, 5).0, [128, 128, 0], "flipped: {flip_green}");
+        assert_eq!(image.get_pixel(10, 5).0[0], 255, "covered texels keep their flow");
+    }
+}
+
+#[test]
+fn a_float_file_holds_the_flow_as_stored() {
+    let fx = flow_fx(0.25, -0.5);
+    let mut options = flow_options(32, false);
+    options.format_override = Some(FileFormat::Exr);
+
+    let image = decode(&fx.render(&options)[0]).to_rgb32f();
+
+    let texel = image.get_pixel(11, 11).0;
+    assert!((texel[0] - 0.625).abs() < 1e-4 && (texel[1] - 0.25).abs() < 1e-4 && texel[2] == 0.0, "{texel:?}");
+}
