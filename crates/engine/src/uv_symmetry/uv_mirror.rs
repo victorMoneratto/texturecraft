@@ -95,15 +95,8 @@ impl<'a> UvMirror<'a> {
 /// The angle (radians) a stamp's x axis needs in the UV frame of `landing` to point along `direction` on the surface
 fn turn_towards(landing: &Frame, direction: Vec3) -> Option<f32> {
     // Least squares for direction = along_u * cos - along_v * sin, with (cos, -sin) the unknowns
-    let (uu, uv, vv) = (landing.along_u.dot(landing.along_u), landing.along_u.dot(landing.along_v), landing.along_v.dot(landing.along_v));
-    let (u_dot, v_dot) = (landing.along_u.dot(direction), landing.along_v.dot(direction));
-    let det = uu * vv - uv * uv;
-    if det.abs() < f32::EPSILON {
-        return None;
-    }
-
-    let (cos, minus_sin) = ((u_dot * vv - v_dot * uv) / det, (v_dot * uu - u_dot * uv) / det);
-    let sin = -minus_sin;
+    let solved = texturecraft_geom::uv_direction(landing.along_u, landing.along_v, direction)?;
+    let (cos, sin) = (solved.x, -solved.y);
     (cos != 0.0 || sin != 0.0).then(|| sin.atan2(cos)).filter(|angle| angle.is_finite())
 }
 

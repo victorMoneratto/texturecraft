@@ -12,12 +12,14 @@ pub mod gbuffer;
 pub mod mesh;
 pub mod primitives;
 pub mod unwrap;
+pub mod uv_direction;
 
 pub use bvh::{Bvh, Hit};
 pub use camera::{OrbitCamera, Ray};
 pub use gbuffer::{NO_TRI, Surface, UvGBuffer, surface_at};
 pub use glam;
 pub use mesh::{BaseColor, MAX_TRIANGLES, Mesh, SubMesh};
+pub use uv_direction::{uv_axes, uv_direction};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq)]
 pub enum GeomError {
