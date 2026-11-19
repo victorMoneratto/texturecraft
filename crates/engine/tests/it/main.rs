@@ -19,6 +19,7 @@ mod flow_follow_storage;
 mod flow_follow_tools;
 mod flow_code;
 mod flow_map;
+mod flow_ops;
 mod frame_selection;
 mod generator_inputs;
 mod gradient_map;

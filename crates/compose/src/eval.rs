@@ -3,6 +3,8 @@
 //! and for export.
 
 pub(crate) mod thumbnail;
+#[cfg(test)]
+mod vector_ops_tests;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -685,6 +687,17 @@ fn is_box_blur(op: Op) -> bool {
     matches!(op, Op::Blur(_) | Op::HighPass | Op::Bevel | Op::Glow(_))
 }
 
+/// Whether neighbourhood filter `op` has a meaning on a packed vector channel. The ones that
+/// move or average texels do, and so do sharpening and high pass, which are linear in the
+/// vector. The others measure a value from 0, which packed is a full reverse flow: they pass a
+/// vector channel through unchanged. No catch-all arm, so a new filter has to be placed here
+fn applies_to_vectors(op: Op) -> bool {
+    match op {
+        Op::Blur(_) | Op::HighPass | Op::Mosaic | Op::Line(_) | Op::Warp { .. } | Op::Slope { .. } => true,
+        Op::Bevel | Op::Glow(_) | Op::Edge => false,
+    }
+}
+
 /// The stack up to and including neighbourhood filter `filter` over texel `region`, continued from `start` (the filter below's field) when given.
 #[allow(clippy::too_many_arguments)]
 fn filter_region(
@@ -785,18 +798,23 @@ fn filter_region(
     // Release tile scatter data before allocating filter buffers
     drop(parts);
 
-    // High pass centers on the channel's middle value (0 for signed channels like height)
+    // High pass centers on the channel's middle value: 0 for signed channels like height, still
+    // water for a packed vector (whose third component is empty)
     let middle = match job {
-        Job::Content(channel) if channel.kind() == ChannelKind::Signed => 0.0,
-        _ => 0.5,
+        Job::Content(channel) if channel.kind() == ChannelKind::Signed => [0.0; 3],
+        Job::Content(channel) if channel.kind() == ChannelKind::Vector => channel.default_value(),
+        _ => [0.5; 3],
     };
 
-    // Bevel and glow measure a value from 0, which on a packed vector is full negative flow
     let packed_vector = matches!(job, Job::Content(channel) if channel.kind() == ChannelKind::Vector);
 
     // A smaller UV tile has fewer texels per UV unit, so its filters reach fewer texels
     let filtered = |scale: f32| -> Vec<f32> {
         let tile_resolution = ((inputs.tile_res() as f32 * scale).round() as u32).max(1);
+        if packed_vector && !applies_to_vectors(op) {
+            return stack_values.clone();
+        }
+
         if let Some((generator, blend)) = generator {
             let texture_set = inputs.project.texture_set(inputs.ts).map_or(inputs.tile_res(), |set| set.resolution);
             return generator_region(generator, blend, opacity, &stack_values, &cover, (region_x, region_y, width, height), (tile_resolution, texture_set));
@@ -826,8 +844,7 @@ fn filter_region(
                     let (original, blurred) = (*slot, sum / weight);
                     let result = match op {
                         Op::Blur(Some(amount)) => original + amount * (original - blurred),
-                        Op::HighPass if component < 3 => original - blurred + middle * coverage,
-                        Op::Bevel | Op::Glow(_) if packed_vector => original,
+                        Op::HighPass if component < 3 => original - blurred + middle.get(component).copied().unwrap_or(0.0) * coverage,
 
                         // Away from 0 by at most the value itself: 0 at the edge, full inside
                         Op::Bevel if component < 3 => original.signum() * original.abs().min((2.0 * blurred * original.signum() - original.abs()).max(0.0)),
@@ -1917,6 +1934,13 @@ impl<'a, 'b> Texel<'a, 'b> {
         };
         for e in c.effects.iter().take(end).skip(skip) {
             (v, cov) = self.content_effect(e, c, v, cov);
+        }
+
+        // A vector channel keeps its third component empty. Every value a layer gives the stack
+        // leaves through here (sources, painted texels, the live stroke, filter fields, effects),
+        // so anchors, flattening, the picker and the stored composite never see another
+        if c.kind == ChannelKind::Vector {
+            v[2] = 0.0;
         }
         (cov > 0.0).then_some((v, cov.min(1.0)))
     }

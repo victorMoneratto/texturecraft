@@ -1036,6 +1036,8 @@ impl Filter {
     pub fn point(&self, kind: ChannelKind, v: [f32; 3]) -> Option<[f32; 3]> {
         let unit = |x: f32| if x.is_finite() { x.clamp(0.0, 1.0) } else { 0.0 };
         Some(match self {
+            // Inverting a direction reverses it: `1 - x` on the packed value would move still water
+            Filter::Invert if kind == ChannelKind::Vector => crate::flow_reversed(v),
             Filter::Invert => per_unit(kind, v, |x| 1.0 - x),
             Filter::Threshold { level } => per_unit(kind, v, |x| if x >= *level { 1.0 } else { 0.0 }),
             Filter::Hsl { hue, saturation, lightness } => match kind {
