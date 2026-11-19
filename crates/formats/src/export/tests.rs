@@ -1011,6 +1011,10 @@ fn still_water_stays_exactly_still_outside_the_uv_islands_in_every_file_kind() {
     let mut fx = flow_fx(0.0, 0.0);
     for (x, y) in HOLE.flat_map(|y| HOLE.map(move |x| (x, y))) {
         fx.coverage[(y * RES + x) as usize] = false;
+
+        // Whatever the composite holds off the mesh (zeros, as a tile allocated for display
+        // padding once did) is never read: a file takes covered texels and their dilation only
+        fx.comp.channels.get_mut(&Channel::Flow).unwrap().set(x, y, &[0, 0, 0]);
     }
 
     // Uncovered, dilated from a still neighbour, and beyond the dilation: zero or the default

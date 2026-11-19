@@ -2,6 +2,8 @@
 //! tile by tile in parallel. This is the reference implementation (the oracle) for the viewport
 //! and for export.
 
+#[cfg(test)]
+mod pad_tests;
 pub(crate) mod thumbnail;
 #[cfg(test)]
 mod vector_ops_tests;
@@ -2434,9 +2436,10 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
         }
     }
     let set: Vec<(u32, u32)> = set.into_iter().collect();
-    for img in out.channels.values_mut() {
+    for (channel, img) in &mut out.channels {
         let comps = img.comps();
         let src: &TileImage = img;
+        let untouched = default_texel(*channel, comps);
 
         // Each tile pads from the original image, so parallel writes stay independent
         let padded: Vec<((u32, u32), Vec<u16>)> = set
@@ -2456,7 +2459,11 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
                         }
 
                         let v = src.get(sx, sy);
-                        let d = data.get_or_insert_with(|| src.tile(tx, ty).map_or_else(|| vec![0; TILE_AREA * comps], <[u16]>::to_vec));
+
+                        // A tile with no covered texel is not allocated and reads as the channel's
+                        // default. Allocated for a strip of padding, the rest of it must still
+                        // read so: zero is black, full reverse flow, a height of -1
+                        let d = data.get_or_insert_with(|| src.tile(tx, ty).map_or_else(|| untouched.repeat(TILE_AREA), <[u16]>::to_vec));
                         let o = (ly * TILE + lx) as usize * comps;
                         if let Some(px) = d.get_mut(o..o + comps) {
                             px.copy_from_slice(&v[..comps]);
@@ -2472,6 +2479,14 @@ pub fn pad_tiles(out: &mut Composite, dmap: &DilationMap, tiles: &[(u32, u32)]) 
         }
     }
     written
+}
+
+/// The stored components (`comps` of them) of a texel of `channel` that nothing covers: its
+/// default value, as [`Composite::value`] reads a tile that is not allocated.
+fn default_texel(channel: Channel, comps: usize) -> Vec<u16> {
+    let default = channel.default_value();
+    let stored = |value: f32| if channel.kind() == ChannelKind::Signed { to_u16_signed(value) } else { to_u16(value) };
+    (0..comps).map(|component| default.get(component).copied().map_or(0, stored)).collect()
 }
 
 /// The layer mask over the whole texture set as `0..=1` values, row by row from the top (the
