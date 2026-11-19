@@ -1,4 +1,5 @@
-//! Where a followed stroke's flow begins: it covers the stroke from its first dab
+//! Where a followed stroke's flow begins and how it ends where the stroke turns back: the flow
+//! covers the stroke from its first dab, and falls off in steps towards a retraced turn
 
 use serde_json::json;
 use texturecraft_engine::core::{Channel, LayerId};
@@ -115,4 +116,44 @@ fn a_click_still_leaves_no_flow() {
     let centre = RESOLUTION / 2;
     assert!(coverage(&session, layer, Channel::BaseColor, centre, centre) > 0.99, "the click paints base colour");
     assert_eq!(session.doc.pixels.layer(layer, Channel::Flow).map_or(0, |image| image.allocated_count()), 0, "a dab alone was heading nowhere");
+}
+
+/// A stroke along the middle from u = 0.3 to 0.7 and straight back with a brush 0.1 across:
+/// the flow map's coverage and the composited flow along U, per texel from the turn backwards
+fn retraced_before_the_turn(hardness: u32, spacing: u32) -> Vec<(f32, f32)> {
+    let mut session = follow_session();
+    execute(&mut session, "tool.brush", &json!({"hardness": hardness, "spacing": spacing})).unwrap();
+    let layer = session.selected_layer().unwrap();
+
+    stroke_uv(&mut session, &[[0.3, 0.5], [0.7, 0.5], [0.3, 0.5]]);
+
+    let (turn, row) = ((0.7 * RESOLUTION as f32) as u32, RESOLUTION / 2);
+    let texels = (0..turn - (0.4 * RESOLUTION as f32) as u32).map(|back| turn - back);
+    texels.map(|x| (coverage(&session, layer, Channel::Flow, x, row), vector_at(&session, (x as f32 + 0.5) / RESOLUTION as f32, 0.5).x)).collect()
+}
+
+#[test]
+fn the_flow_of_a_retraced_stroke_falls_off_towards_the_turn() {
+    // The brush is 25.6 texels across, with a dab every 2.56 texels or every 1.28
+    const DIAMETER: usize = 26;
+    for (hardness, spacing) in [(100, 10), (50, 10), (100, 5)] {
+        let texels = retraced_before_the_turn(hardness, spacing);
+        let coverages: Vec<f32> = texels.iter().map(|(coverage, _)| *coverage).collect();
+        let shown: Vec<i32> = coverages.iter().map(|coverage| (coverage * 100.0).round() as i32).collect();
+
+        // Within a diameter of the turn the two ways cancel, and a diameter and a half back the way home is all there
+        assert!(coverages[2..DIAMETER - 1].iter().all(|coverage| *coverage == 0.0), "hardness {hardness} spacing {spacing}: {shown:?}");
+        assert!(coverages[DIAMETER * 3 / 2 + 1..].iter().all(|coverage| *coverage > 0.99), "hardness {hardness} spacing {spacing}: {shown:?}");
+
+        // Between the two it rises a dab at a time, with no edge
+        let steps: Vec<f32> = coverages.windows(2).skip(2).map(|pair| pair[1] - pair[0]).collect();
+        let largest = steps.iter().copied().fold(0.0, f32::max);
+        assert!(steps.iter().all(|step| *step > -1e-3), "hardness {hardness} spacing {spacing}: {shown:?}");
+        assert!(largest < 0.4, "hardness {hardness} spacing {spacing}: a step of {largest} in {shown:?}");
+        let levels = shown.iter().filter(|percent| **percent > 0 && **percent < 100).collect::<std::collections::BTreeSet<_>>().len();
+        assert!(levels >= 4, "hardness {hardness} spacing {spacing}: {shown:?}");
+
+        // Nowhere does the way out show through: the flow is still or heads home
+        assert!(texels.iter().skip(2).all(|(_, along_u)| *along_u <= 1e-3), "hardness {hardness} spacing {spacing}: {texels:?}");
+    }
 }

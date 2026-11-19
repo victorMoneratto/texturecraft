@@ -225,6 +225,56 @@ mod tests {
     }
 
     #[test]
+    fn a_pass_that_turns_back_comes_in_over_a_window() {
+        // Ten dabs to a diameter: a texel left more than ten dabs ago starts a new pass
+        let returning = |dab: u32| {
+            let mut producer = FlowProducer::new(SIZE, SIZE, 1.0, 0.1);
+            producer.deposit(&[(8, 8, 1.0)], &[[1.0, 0.0]], 0);
+            producer.deposit(&[(8, 8, 1.0)], &[[-1.0, 0.0]], dab);
+            read(&producer, 8, 8)
+        };
+
+        // Inside the window the two ways cancel, and the first dab past it covers no more than that
+        assert_eq!(returning(10).1, 0.0);
+        assert_eq!(returning(11).1, 0.0, "no edge where the new pass starts");
+
+        // From there the way back comes in, never flowing the way out, to all there is ten dabs on.
+        // A retraced stroke meets every other of these gaps, a dab of distance apart
+        let coverages: Vec<f32> = (11..=22).map(|dab| returning(dab).1).collect();
+        assert!(coverages.windows(2).all(|pair| pair[1] >= pair[0]), "{coverages:?}");
+        assert!(coverages.windows(3).all(|triple| triple[2] - triple[0] < 0.4), "no step is an edge: {coverages:?}");
+        for dab in 12..21 {
+            let (vector, coverage) = returning(dab);
+            assert!(vector[0] < 0.0 && vector[1].abs() <= STORED && coverage > 0.0 && coverage < 1.0, "dab {dab}: {vector:?} {coverage}");
+        }
+        for dab in [21, 22, 400] {
+            let (vector, coverage) = returning(dab);
+            assert!(close(vector, [-1.0, 0.0]) && near(coverage, 1.0), "dab {dab}: {vector:?} {coverage}");
+        }
+    }
+
+    #[test]
+    fn a_pass_that_does_not_turn_back_covers_at_once() {
+        // Across the earlier pass, and up to 133 degrees from it, a mean of the two is a direction
+        for degrees in [0.0f32, 45.0, 90.0, 130.0] {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let mut producer = FlowProducer::new(SIZE, SIZE, 1.0, 0.1);
+            producer.deposit(&[(8, 8, 1.0)], &[[1.0, 0.0]], 0);
+            producer.deposit(&[(8, 8, 1.0)], &[[cos, sin]], 11);
+
+            let (vector, coverage) = read(&producer, 8, 8);
+            assert!(close(vector, [cos, sin]) && near(coverage, 1.0), "{degrees}: {vector:?} {coverage}");
+        }
+
+        // A soft dab that turns back blends over the pass before it by what it shows of itself
+        let mut soft = FlowProducer::new(SIZE, SIZE, 1.0, 0.1);
+        soft.deposit(&[(8, 8, 1.0)], &[[1.0, 0.0]], 0);
+        soft.deposit(&[(8, 8, 0.25)], &[[-1.0, 0.0]], 400);
+        let (vector, coverage) = read(&soft, 8, 8);
+        assert!(close(vector, [0.5, 0.0]) && near(coverage, 1.0), "{vector:?} {coverage}");
+    }
+
+    #[test]
     fn directions_that_cancel_leave_no_coverage() {
         let mut producer = FlowProducer::new(SIZE, SIZE, 1.0, 0.1);
         producer.deposit(&[(5, 5, 0.75), (6, 5, 0.75)], &[[1.0, 0.0]; 2], 0);
