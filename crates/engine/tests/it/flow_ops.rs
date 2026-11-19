@@ -1,8 +1,9 @@
-//! The compositor's rules for the flow map, driven through commands: every filter of the
-//! library keeps still water still and the third component empty
+//! The compositor's rules for the flow map, driven through commands: the channel blends in
+//! Normal mode whatever mode is stored, and every filter of the library keeps still water
+//! still and the third component empty
 
 use serde_json::{Value, json};
-use texturecraft_engine::core::{Channel, FLOW_STILL_LEVEL, flow_from_polar, flow_reversed, flow_stored_level};
+use texturecraft_engine::core::{BlendMode, Channel, FLOW_STILL_LEVEL, flow_from_polar, flow_reversed, flow_stored_level};
 use texturecraft_engine::geom::primitives;
 use texturecraft_engine::{Session, execute};
 
@@ -22,6 +23,35 @@ fn flow_levels(session: &mut Session) -> Vec<[u16; 3]> {
     session.update();
     let image = &session.caches[0].composite.channels[&Channel::Flow];
     (0..RESOLUTION * RESOLUTION).map(|i| image.get(i % RESOLUTION, i / RESOLUTION)).map(|texel| [texel[0], texel[1], texel[2]]).collect()
+}
+
+#[test]
+fn a_soft_part_transparent_stroke_composites_the_same_under_every_stored_blend_mode() {
+    let mut session = flow_session();
+    execute(&mut session, "layer.add.fill", &json!({})).unwrap();
+    execute(&mut session, "layer.fill.set", &json!({"channel": "flow", "angle": 180.0, "speed": 0.5, "solo": true})).unwrap();
+    execute(&mut session, "layer.add.paint", &Value::Null).unwrap();
+    execute(&mut session, "tool.material", &json!({"channel": "flow", "angle": 0.0, "speed": 1.0, "solo": true})).unwrap();
+    execute(&mut session, "tool.brush", &json!({"size": 30, "hardness": 0, "opacity": 25})).unwrap();
+    execute(&mut session, "tool.strokeUv", &json!({"points": [[0.3, 0.5], [0.7, 0.5]]})).unwrap();
+
+    let normal = flow_levels(&mut session);
+    let below = flow_from_polar(180.0, 0.5).map(flow_stored_level);
+    let touched = normal.iter().filter(|texel| **texel != below).count();
+    let distinct: std::collections::BTreeSet<u16> = normal.iter().map(|texel| texel[0]).collect();
+    assert!(touched > 100 && distinct.len() > 20, "the stroke has a soft edge: {touched} texels, {} levels", distinct.len());
+
+    // A quarter of the way from the fill to the stroke at most: the brush's opacity caps it
+    let quarter = (i32::from(below[0]) + (i32::from(u16::MAX) - i32::from(below[0])) / 4) as u16;
+    assert!(normal.iter().all(|texel| texel[0] <= quarter + 1), "{:?} above {quarter}", normal.iter().map(|texel| texel[0]).max());
+
+    for mode in BlendMode::MENU.into_iter().flatten().filter(|mode| *mode != BlendMode::Disable) {
+        execute(&mut session, "layer.blend", &json!({"channel": "flow", "mode": mode.label()})).unwrap();
+
+        let stored = flow_levels(&mut session);
+        let differs = stored.iter().zip(&normal).position(|(a, b)| a != b);
+        assert_eq!(differs.map(|at| (at as u32 % RESOLUTION, at as u32 / RESOLUTION, stored[at], normal[at])), None, "{mode:?}");
+    }
 }
 
 /// What a library filter does to a uniform flow: nothing, its reverse, or still water

@@ -1,6 +1,6 @@
 //! What every effect the compositor can apply to layer content does to a packed vector channel
 //! (the flow map), and the rules that hold whatever the effect: still water stays exactly
-//! still and the third component stays empty
+//! still, the third component stays empty, and the channel blends in Normal mode
 
 use texturecraft_core::{
     ChannelBlend, ChannelFormat, CompareOp, Effect, FLOW_STILL, FLOW_STILL_LEVEL, GeneratorKind, Layer, Levels, Procedural, ProceduralKind, TextureSet,
@@ -337,4 +337,43 @@ fn blue_stays_empty_whatever_a_source_or_a_stored_texel_holds() {
         image.set(x, y, &[u16::MAX, FLOW_STILL_LEVEL, 40000, u16::MAX]);
     }
     assert!(painted.flow().iter().all(|texel| *texel == [u16::MAX, FLOW_STILL_LEVEL, 0]));
+}
+
+#[test]
+fn a_stored_blend_mode_never_changes_how_a_vector_channel_composites() {
+    let (west, north) = (flow_from_polar(180.0, 0.5), flow_from_polar(90.0, 1.0));
+
+    // A soft stroke (coverage rising from nothing to full across the image) on a paint layer at
+    // part opacity over a fill, with a material effect laid over the paint at part opacity
+    let build = |layer_mode: BlendMode, effect_mode: BlendMode| {
+        let mut fixture = flow_fill(Source::Uniform(west));
+        let top = fixture.project.alloc_id();
+        let mut top_layer = Layer::new(top, "Top", LayerKind::Paint, &[]);
+        top_layer.channels.insert(Channel::Flow, ChannelBlend { mode: layer_mode, opacity: 0.5 });
+
+        let stroke = fixture.pixels.layer_mut(top, Channel::Flow, (SIDE, SIDE));
+        for (x, y) in (0..SIDE).flat_map(|y| (0..SIDE).map(move |x| (x, y))) {
+            let coverage = x as f32 / (SIDE - 1) as f32;
+            let premultiplied = north.map(|component| texturecraft_texel::to_u16(component * coverage));
+            stroke.set(x, y, &[premultiplied[0], premultiplied[1], 0, texturecraft_texel::to_u16(coverage)]);
+        }
+
+        let mut material = Fill::default();
+        material.sources.insert(Channel::Flow, Source::Uniform(flow_from_polar(315.0, 0.8)));
+        let mut effect = Effect::new(fixture.project.alloc_id(), EffectKind::Material(material));
+        (effect.blend, effect.opacity) = (effect_mode, 0.4);
+        top_layer.content_effects.push(effect);
+        fixture.project.insert_layer(0, top_layer, None, false).unwrap();
+        fixture.flow()
+    };
+    let normal = build(BlendMode::Normal, BlendMode::Normal);
+    let row: Vec<[u16; 3]> = normal.iter().take(SIDE as usize).copied().collect();
+    assert!(row.windows(2).all(|pair| pair[0] != pair[1]), "the soft edge shows as a ramp: {row:?}");
+
+    for mode in BlendMode::MENU.into_iter().flatten().filter(|mode| *mode != BlendMode::Disable) {
+        let (on_layer, on_effect) = (build(mode, BlendMode::Normal), build(BlendMode::Normal, mode));
+        let differs = |texels: &[[u16; 3]]| texels.iter().zip(&normal).position(|(a, b)| a != b).map(|at| (at, texels[at], normal[at]));
+        assert_eq!(differs(&on_layer), None, "{mode:?} on the layer");
+        assert_eq!(differs(&on_effect), None, "{mode:?} on the effect");
+    }
 }

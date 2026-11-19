@@ -1206,7 +1206,8 @@ fn plan_node<'a>(
             let data = if paint { tile_of(inp, inp.pixels.layer(layer.id, *c), tx, ty, Some(*c)) } else { None };
             let effects = if fx { effect_plans(inp, &layer.content_effects, tx, ty, Some(*c)) } else { Vec::new() };
             let start = fx_start.zip(fields.and_then(|f| f.get(&FieldKey::Content(id, *c))));
-            Some(ChanPlan { ch: c.index(), kind: c.kind(), comps: c.components(), blend: b.mode, opacity: b.opacity.clamp(0.0, 1.0), data, effects, start })
+            let blend = effective_blend(c.kind(), b.mode);
+            Some(ChanPlan { ch: c.index(), kind: c.kind(), comps: c.components(), blend, opacity: b.opacity.clamp(0.0, 1.0), data, effects, start })
         })
         .collect::<Vec<_>>();
     let content = match &layer.kind {
@@ -1274,13 +1275,18 @@ fn plan_levels<'a>(inp: &Inputs<'a>, levels: &[Level], channels: &[Channel], tx:
         .collect()
 }
 
+/// The mode a channel of `kind` blends in, given the mode a command or a file stored for it.
+/// Blend modes work on the packed value, where a zero vector is not 0: Add on two still texels
+/// would give full flow. A vector channel therefore always blends in Normal mode. Resolved
+/// before anything reads the mode: Replace also changes the weight a layer is laid over with
+#[inline]
+fn effective_blend(kind: ChannelKind, stored: BlendMode) -> BlendMode {
+    if kind == ChannelKind::Vector { BlendMode::Normal } else { stored }
+}
+
 #[inline]
 fn blend_chan(c: &ChanPlan, mode: BlendMode, a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    // Blend modes work on the packed value, where a zero vector is 0.5: Add on two still texels
-    // would give full flow. A vector channel replaces whatever mode a command or a file set
-    if c.kind == ChannelKind::Vector {
-        return b;
-    }
+    let mode = effective_blend(c.kind, mode);
     if c.comps == 3 { blend3(mode, a, b) } else { [blend1(mode, a[0], b[0]); 3] }
 }
 
