@@ -42,6 +42,8 @@ use crate::overlay_quad::OverlayQuad;
 use crate::set_highlight::SetHighlight;
 use crate::subdivide::{self, Vertex};
 
+mod upload_aux_region;
+
 pub const MSAA: u32 = 4;
 pub const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
