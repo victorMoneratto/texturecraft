@@ -256,6 +256,14 @@ pub struct ToolState {
     /// The Path tool's curve being edited.
     #[serde(default)]
     pub path: crate::path_tool::PathState,
+    /// Flow map: strokes paint the direction they travel (the default) instead of the fixed
+    /// direction in `values`, whose length stays the painted speed either way.
+    #[serde(default = "default_flow_follow")]
+    pub flow_follow: bool,
+}
+
+fn default_flow_follow() -> bool {
+    true
 }
 
 pub(crate) fn default_smudge_strength() -> f32 {
@@ -309,9 +317,13 @@ impl Default for ToolState {
             clone_aligned: true,
             clone_from: CloneFrom::Composite,
             path: Default::default(),
+            flow_follow: default_flow_follow(),
         };
         t.values.insert(Channel::BaseColor, [0.8, 0.8, 0.8]);
         t.values.insert(Channel::Roughness, [0.3; 3]);
+
+        // Full speed: a flow brush at the channel's default, still water, would paint no flow
+        t.values.insert(Channel::Flow, texturecraft_core::flow_from_polar(0.0, 1.0));
         t
     }
 }
@@ -977,8 +989,8 @@ impl Session {
                 mask_value: self.tool.mask_value,
                 stencil: stroke.stencil.clone(),
                 carried_mask: stroke.canvas.pickup.as_ref().and_then(|pickup| pickup.mask_values()).cloned(),
-                carried: stroke.canvas.pickup.as_ref().map(|pickup| pickup.values.clone()).unwrap_or_default(),
-                coverage: Default::default(),
+                carried: crate::flow_stroke::preview_carried(stroke, stroke.canvas.pickup.as_ref().map(|pickup| pickup.values.clone()).unwrap_or_default()),
+                coverage: crate::flow_stroke::preview_coverage(stroke),
             })
         });
 

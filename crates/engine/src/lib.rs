@@ -21,6 +21,7 @@ pub mod fill_hit_test;
 pub mod fill_mode;
 pub mod filter_lib;
 mod flow_params;
+pub mod flow_stroke;
 mod frame_target;
 pub mod inspect;
 pub mod instance_cmds;

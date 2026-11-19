@@ -6,13 +6,13 @@ use texturecraft_engine::core::{Channel, FLOW_STILL, LayerId, flow_from_polar, f
 use texturecraft_engine::geom::primitives;
 use texturecraft_engine::{Session, execute};
 
-const RESOLUTION: u32 = 256;
+pub(super) const RESOLUTION: u32 = 256;
 
 /// Stored as 16 bits: one step of the packed value
-const STORAGE_STEP: f32 = 1.0 / 65535.0;
+pub(super) const STORAGE_STEP: f32 = 1.0 / 65535.0;
 
 /// A plane project (its UVs fill the texture) whose set has the flow map
-fn flow_session() -> Session {
+pub(super) fn flow_session() -> Session {
     let mut session = Session::new_project("Flow", primitives::plane(2.0, 4), "builtin:plane", None, RESOLUTION).unwrap();
     execute(&mut session, "textureSet.channel.add", &json!({"channel": "flow"})).unwrap();
     execute(&mut session, "tool.paint", &Value::Null).unwrap();
@@ -20,16 +20,16 @@ fn flow_session() -> Session {
 }
 
 /// The composited flow map value at (`u`, `v`)
-fn flow_at(session: &Session, u: f32, v: f32) -> [f32; 3] {
+pub(super) fn flow_at(session: &Session, u: f32, v: f32) -> [f32; 3] {
     session.caches[0].composite.value(Channel::Flow, (u * RESOLUTION as f32) as u32, (v * RESOLUTION as f32) as u32)
 }
 
-fn close(actual: [f32; 3], expected: [f32; 3]) -> bool {
+pub(super) fn close(actual: [f32; 3], expected: [f32; 3]) -> bool {
     actual.iter().zip(expected).all(|(a, e)| (a - e).abs() <= 2.0 * STORAGE_STEP)
 }
 
 /// The smaller turn between two directions: 359.9 and 0 are 0.1 apart
-fn degrees_apart(a: f32, b: f32) -> f32 {
+pub(super) fn degrees_apart(a: f32, b: f32) -> f32 {
     let turn = (a - b).rem_euclid(360.0);
     turn.min(360.0 - turn)
 }
@@ -149,11 +149,12 @@ fn hostile_directions_paint_still_water_or_are_refused() {
     let mut session = flow_session();
 
     // Numbers JSON cannot carry (NaN, infinity) arrive as null and count as absent
+    let untouched = session.tool.values[&Channel::Flow];
     for params in
         [json!({"channel": "flow", "angle": null, "speed": null}), json!({"channel": "flow", "angle": "east"}), json!({"channel": "flow", "angle": [1, 2]})]
     {
         execute(&mut session, "tool.material", &params).unwrap();
-        assert_eq!(session.tool.values[&Channel::Flow], FLOW_STILL, "{params}");
+        assert_eq!(session.tool.values[&Channel::Flow], untouched, "{params}");
     }
 
     // Out of range values are clamped or wrapped, never stored raw

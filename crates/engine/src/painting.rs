@@ -313,8 +313,11 @@ impl Session {
                 src.offset.get_or_insert(offset);
             }
         }
+        canvas.flow = crate::flow_stroke::producer(self, target, &values, size, stroke.settings.spacing);
         if canvas.pickup.is_none() && tool == Tool::Paint && matches!(target, Some(PaintTarget::Layer(_))) {
-            canvas.pickup = self.brush_pattern(&values);
+            // A stroke that follows its direction keeps the flow map out of the material's pattern
+            let shared = crate::flow_stroke::shared_values(&values, canvas.flow.is_some());
+            canvas.pickup = if shared.is_empty() { None } else { self.brush_pattern(&shared) };
         }
         let label = if quick_mask {
             QUICK_MASK_STROKE_LABEL.to_string()
@@ -536,7 +539,7 @@ impl Session {
         let (pixels, mask_value) = (&self.doc.pixels, self.tool.mask_value);
         let mut staging = std::mem::take(&mut st.staging);
         with_commit_source(st, gbuf.as_deref(), &self.mesh, &recent, |src| match t {
-            PaintTarget::Layer(id) => staging.stage_layer(pixels, id, &st.values, &src),
+            PaintTarget::Layer(id) => crate::flow_stroke::layer_parts(st, src, |values, src| staging.stage_layer(pixels, id, values, &src)),
             PaintTarget::Mask(eid) => staging.stage_mask(pixels, eid, mask_value, &src),
         });
         st.staging = staging;
@@ -551,7 +554,7 @@ impl Session {
     pub fn end_stroke(&mut self) -> Result<()> {
         let Some(mut st) = self.stroke.take() else { return Ok(()) };
         let size = (st.canvas.alpha.width(), st.canvas.alpha.height());
-        if st.canvas.dirty.is_empty() {
+        if st.canvas.dirty.is_empty() || crate::flow_stroke::deposited_nothing(&st) {
             // Nothing painted: drop any mask effect the stroke created.
             self.doc = st.before;
             return Ok(());
@@ -563,7 +566,9 @@ impl Session {
         match st.target {
             Some(PaintTarget::Layer(id)) => {
                 let pixels = &mut self.doc.pixels;
-                with_commit_source(&st, gbuf.as_deref(), &mesh, &st.canvas.dirty, |src| commit_layer(pixels, id, size, &st.values, src, &mut staging));
+                with_commit_source(&st, gbuf.as_deref(), &mesh, &st.canvas.dirty, |src| {
+                    crate::flow_stroke::layer_parts(&st, src, |values, src| commit_layer(pixels, id, size, values, src, &mut staging))
+                });
             }
             Some(PaintTarget::Mask(eid)) => {
                 let pixels = &mut self.doc.pixels;
@@ -678,7 +683,9 @@ impl Session {
         let tile = (x / texturecraft_texel::TILE, y / texturecraft_texel::TILE);
         let source = self.document_composite(texture_set, &[tile]).ok_or_else(|| EngineError::Other("texture set not ready".into()))?;
         let picked: BTreeMap<_, _> = source.channels.keys().map(|&channel| (channel, source.value(channel, x, y))).collect();
+        let kept_flow = crate::flow_stroke::kept_from_picker(&self.tool);
         self.tool.values.extend(&picked);
+        self.tool.values.extend(kept_flow.map(|flow| (Channel::Flow, flow)));
         self.tool.material = None;
         Ok(picked)
     }

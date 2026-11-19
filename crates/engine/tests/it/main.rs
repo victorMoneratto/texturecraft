@@ -13,6 +13,8 @@ mod content_effects;
 mod export_colour_space;
 mod filter_swap;
 mod filters;
+mod flow_follow;
+mod flow_follow_tools;
 mod flow_map;
 mod frame_selection;
 mod generator_inputs;

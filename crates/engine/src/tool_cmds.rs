@@ -49,7 +49,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Tool material",
             [],
             None,
-            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's fixed direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other), enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply)",
+            "{channel, color?: ([r,g,b] linear or \"#rrggbb\" sRGB)|value?|angle?: degrees, speed?: 0..1 (the flow channel's fixed direction, counter-clockwise on the image from pointing right, and its vector length; one alone keeps the other), follow?: bool (flow channel: strokes paint the direction they travel at that speed, the default; false paints the fixed direction, and so does giving an angle or a value without follow), enabled?, solo?: true (paint this channel only)} or {maskValue?: 0..1} or {material: id or label of a simple material (see material.list, smart: false)} — the brush paints that material's pattern (colour, metallic, roughness, height…, fixed to the surface, its size following the brush size) in the channels that are on; no layer is added, smart materials are refused (add them with material.apply)",
             always,
             material
         ),
@@ -315,6 +315,7 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
     let channel = channel_param("tool.material", p, "channel")?;
     let color = color_param("tool.material", p, "color")?;
     let value = color_param("tool.material", p, "value")?;
+    let follow = crate::flow_params::follow_param("tool.material", p, channel)?;
     if let Some(id) = strp(p, "material") {
         let values = crate::materials::brush_values(id).ok_or_else(|| {
             bad("tool.material", format!("`{id}` is not a simple material (a brush paints plain values; add smart materials with material.apply)"))
@@ -345,6 +346,7 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
             s.tool.enabled.insert(c);
             s.tool.material = None;
         }
+        crate::flow_params::set_follow(&mut s.tool, c, follow, f32p(p, "angle").is_some() || color.or(value).is_some());
         match boolp(p, "enabled") {
             Some(true) => {
                 s.tool.enabled.insert(c);
@@ -364,6 +366,7 @@ fn material(s: &mut Session, p: &Value) -> Result<Value> {
         "values": s.tool.values.iter().map(|(c, v)| (c.id().to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
         "enabled": s.tool.enabled.iter().map(|c| c.id()).collect::<Vec<_>>(),
         "maskValue": s.tool.mask_value,
+        "flow": crate::flow_params::tool_flow_json(&s.tool),
     }))
 }
 

@@ -783,7 +783,13 @@ pub fn brush_values(id: &str) -> Option<Vec<(Channel, [f32; 3])>> {
 pub(crate) fn brush_fill(id: LayerId, sources: Vec<(Channel, Source)>, scale: f32) -> Layer {
     let channels: Vec<Channel> = sources.iter().map(|(channel, _)| *channel).collect();
     let projection = Projection::Triplanar { scale, sharpness: 8.0, offset: [0.0; 3] };
-    Layer::new(id, "Brush material", LayerKind::Fill(Fill { sources: sources.into_iter().collect(), projection, link: None }), &channels)
+    let mut layer = Layer::new(id, "Brush material", LayerKind::Fill(Fill { sources: sources.into_iter().collect(), projection, link: None }), &channels);
+
+    // A fill gets the flow map only when asked: the brush asks for every channel it carries
+    for channel in channels {
+        layer.channels.entry(channel).or_default();
+    }
+    layer
 }
 
 /// Where [`apply_at`] puts a material.

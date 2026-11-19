@@ -217,7 +217,7 @@ pub fn session(session: &Session) -> Value {
         "selectedLayers": crate::layer_selection::ids_json(&session.selected_layers()),
         "target": match session.target { StackTarget::Content => json!("content"), StackTarget::Mask => json!("mask"), StackTarget::Effect(effect) => json!(effect.0) },
         "layers": stack(session, texture_set),
-        "tool": { "tool": session.tool.tool.id(), "brush": crate::tool_cmds::brush_json(session) },
+        "tool": { "tool": session.tool.tool.id(), "brush": crate::tool_cmds::brush_json(session), "flow": crate::flow_params::tool_flow_json(&session.tool) },
         "view": session.view.label(),
         "solo": session.solo.map(|solo| json!({ "layer": solo.layer.0, "ignoreMask": solo.ignore_mask })),
         "bakePreview": crate::bake_preview::preview_json(session),
