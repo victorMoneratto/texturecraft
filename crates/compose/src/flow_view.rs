@@ -6,7 +6,7 @@
 //! 32767 levels each way) and written around the 8-bit upper middle level (128 of 255),
 //! reaching 127 levels each way, so still water is one exact colour.
 
-use texturecraft_core::flow_offset_in;
+use texturecraft_core::{flow_mean_offset_in, flow_offset_in};
 
 /// The 8-bit level of a component at rest
 pub const FLOW_VIEW_STILL_LEVEL: u8 = 128;
@@ -22,6 +22,15 @@ pub const FLOW_VIEW_STILL: [u8; 4] = [FLOW_VIEW_STILL_LEVEL, FLOW_VIEW_STILL_LEV
 /// halfway between two; the lowest lies one step past a full reverse flow and reads as it.
 pub fn flow_view_byte(level: u16) -> u8 {
     let levels = flow_offset_in(level, u32::from(FLOW_VIEW_REACH), false);
+    (i32::from(FLOW_VIEW_STILL_LEVEL) + levels).clamp(0, i32::from(u8::MAX)) as u8
+}
+
+/// The 8-bit level of several stored components shown as one texel (a view smaller than the
+/// map): their mean as a vector component, from the sum of their
+/// [`texturecraft_core::flow_level_offset`]s and their count. One component gives
+/// [`flow_view_byte`]; still texels give the still level exactly.
+pub fn flow_view_mean_byte(offset_sum: i64, count: u32) -> u8 {
+    let levels = flow_mean_offset_in(offset_sum, count, u32::from(FLOW_VIEW_REACH));
     (i32::from(FLOW_VIEW_STILL_LEVEL) + levels).clamp(0, i32::from(u8::MAX)) as u8
 }
 
@@ -96,6 +105,15 @@ mod tests {
         for packed in [0.0, 0.1, 0.25, 0.49999, 0.5, 0.50001, 0.75, 0.9, 1.0, -3.0, 4.0] {
             assert_eq!(texturecraft_core::flow_stored_level(packed), to_u16(packed), "{packed}");
         }
+    }
+
+    #[test]
+    fn a_mean_of_one_component_is_that_components_level() {
+        for level in (0..=u16::MAX).step_by(7).chain([u16::MAX]) {
+            assert_eq!(flow_view_mean_byte(i64::from(texturecraft_core::flow_level_offset(level)), 1), flow_view_byte(level), "{level}");
+        }
+        assert_eq!(flow_view_mean_byte(0, 16), FLOW_VIEW_STILL_LEVEL);
+        assert_eq!((flow_view_mean_byte(32767 * 2, 4), flow_view_mean_byte(-32767 * 2, 4)), (192, 64), "half the texels at full speed");
     }
 
     #[test]

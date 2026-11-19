@@ -80,7 +80,7 @@ impl Gpu {
                     let own_mask = s.doc.project.locate(id).filter(|(t, _, _)| *t == ts).and_then(|_| s.mask_view_rgba(id, res));
                     Some(own_mask.unwrap_or_else(|| texturecraft_render::mask_view::mask_view_blank_rgba(cache.size)))
                 }
-                ViewMode::Channel(Channel::Flow) => Some(texturecraft_render::flow_view::flow_view_rgba(comp, res)),
+                ViewMode::Channel(Channel::Flow) => Some(texturecraft_render::flow_view::flow_view_rgba(comp)),
 
                 // No other view reads the aux texture
                 ViewMode::Material | ViewMode::Channel(_) | ViewMode::UvChecker => None,

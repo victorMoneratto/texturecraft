@@ -32,14 +32,14 @@ pub(crate) fn sync(held: &mut BTreeMap<usize, AuxContent>, session: &Session, co
         let has_channel = cache.composite.channels.contains_key(&Channel::Flow);
         let shown = content(has_channel);
         if held.get(&texture_set) != Some(&shown) {
-            out.aux.push((texture_set, side, flow_view_rgba(&cache.composite, side)));
+            out.aux.push((texture_set, side, flow_view_rgba(&cache.composite)));
             held.insert(texture_set, shown);
             continue;
         }
 
         // Without the channel the texture is still water everywhere and stays so
         let Some((_, tiles)) = composited.iter().find(|(set, _)| *set == texture_set && has_channel) else { continue };
-        let regions: Vec<_> = tiles.par_iter().filter_map(|&(tile_x, tile_y)| flow_view_tile(&cache.composite, side, tile_x, tile_y)).collect();
+        let regions: Vec<_> = tiles.par_iter().filter_map(|&(tile_x, tile_y)| flow_view_tile(&cache.composite, tile_x, tile_y)).collect();
         out.aux_regions.extend(regions.into_iter().map(|region| (texture_set, region)));
     }
 }

@@ -69,10 +69,17 @@ pub fn flow_unpack(packed: f32) -> f32 {
 /// away from zero so opposite flows stay mirrored. Negated when `reverse`.
 pub fn flow_offset_in(level: u16, reach: u32, reverse: bool) -> i32 {
     let offset = i64::from(flow_level_offset(level));
-    let stored_reach = i64::from(FLOW_REACH_LEVELS);
-    let levels = (2 * offset.abs() * i64::from(reach) + stored_reach) / (2 * stored_reach);
-    let levels = levels.min(i64::from(i32::MAX)) as i32;
-    if (offset < 0) != reverse { -levels } else { levels }
+    flow_mean_offset_in(if reverse { -offset } else { offset }, 1, reach)
+}
+
+/// [`flow_offset_in`] of the mean of `count` stored components, given the sum of their
+/// [`flow_level_offset`]s: several texels shown as one. The mean of still texels is still, and
+/// the means of mirrored flows are mirrored.
+pub fn flow_mean_offset_in(offset_sum: i64, count: u32, reach: u32) -> i32 {
+    let divisor = 2 * i64::from(FLOW_REACH_LEVELS) * i64::from(count.max(1));
+    let levels = offset_sum.saturating_abs().saturating_mul(2).saturating_mul(i64::from(reach)).saturating_add(divisor / 2) / divisor;
+    let levels = levels.min(i64::from(reach)) as i32;
+    if offset_sum < 0 { -levels } else { levels }
 }
 
 /// A packed flow map value flowing the other way at the same speed. Still water stays still;
@@ -155,6 +162,29 @@ mod tests {
             // The stored code itself is kept level for level
             assert_eq!(flow_offset_in(above, u32::from(FLOW_REACH_LEVELS), false), i32::from(step));
         }
+    }
+
+    #[test]
+    fn a_mean_of_stored_components_keeps_still_exact_and_mirrors() {
+        const BYTE_REACH: u32 = 127;
+
+        // One texel is the texel itself
+        for level in [0u16, 1, 100, 16384, 32767, 32768, 32769, 49152, u16::MAX] {
+            assert_eq!(flow_mean_offset_in(i64::from(flow_level_offset(level)), 1, BYTE_REACH), flow_offset_in(level, BYTE_REACH, false));
+        }
+
+        // Still texels, and a flow with its opposite, average to still; a full flow among three still ones is a quarter
+        assert_eq!(flow_mean_offset_in(0, 4, BYTE_REACH), 0);
+        assert_eq!(flow_mean_offset_in(i64::from(flow_level_offset(60000)) + i64::from(flow_level_offset(5536)), 2, BYTE_REACH), 0);
+        assert_eq!(flow_mean_offset_in(32767, 4, BYTE_REACH), 32);
+        assert_eq!(flow_mean_offset_in(-32767, 4, BYTE_REACH), -32);
+        for sum in [1i64, 77, 12345, 65534, 131068] {
+            assert_eq!(flow_mean_offset_in(sum, 4, BYTE_REACH), -flow_mean_offset_in(-sum, 4, BYTE_REACH), "{sum}");
+        }
+
+        // Hostile sums and counts stay within the reach
+        assert_eq!(flow_mean_offset_in(i64::MAX, 0, BYTE_REACH), 127);
+        assert_eq!(flow_mean_offset_in(i64::MIN, 1, BYTE_REACH), -127);
     }
 
     #[test]
